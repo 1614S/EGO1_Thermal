@@ -30,12 +30,14 @@ module xadc_frontend #(
     wire [15:0] drp_do;
     wire        drdy;
 
-    localparam [1:0] S_HOLD  = 2'd0;
-    localparam [1:0] S_WAIT  = 2'd1;
-    localparam [1:0] S_ISSUE = 2'd2;
-    localparam [1:0] S_DRDY  = 2'd3;
+    localparam [2:0] S_HOLD  = 3'd0;
+    localparam [2:0] S_WAIT  = 3'd1;
+    localparam [2:0] S_ISSUE = 3'd2;
+    localparam [2:0] S_DRDY  = 3'd3;
+    localparam [2:0] S_CONV  = 3'd4;   // 换算流水级（拆开组合路径，保 100 MHz）
 
-    reg [1:0]  st;
+    reg [2:0]  st;
+    reg [31:0] t_calc_r;
     reg [15:0] ms_cnt;
     reg [15:0] hold_cnt;
 
@@ -54,6 +56,7 @@ module xadc_frontend #(
             tj_q8_8  <= 16'sd0;
             tj_valid <= 1'b0;
             code_raw <= 12'd0;
+            t_calc_r <= 32'd0;
         end else begin
             tj_valid <= 1'b0;
             den      <= 1'b0;
@@ -85,18 +88,25 @@ module xadc_frontend #(
 
                 S_ISSUE: st <= S_DRDY;
 
+                // 第一级：乘法 + 减法（DSP48 + 进位链），结果打一拍
                 S_DRDY: begin
                     if (drdy) begin
                         code_raw <= drp_do[11:0];
-                        tj_valid <= 1'b1;
-                        st       <= S_WAIT;
-                        if ($signed(t_calc) > 32'sd32000)
-                            tj_q8_8 <= 16'sd32000;
-                        else if ($signed(t_calc) < -32'sd10240)
-                            tj_q8_8 <= -16'sd10240;
-                        else
-                            tj_q8_8 <= t_calc[15:0];
+                        t_calc_r <= t_calc;
+                        st       <= S_CONV;
                     end
+                end
+
+                // 第二级：饱和 + 输出，组合逻辑只剩比较
+                S_CONV: begin
+                    tj_valid <= 1'b1;
+                    if ($signed(t_calc_r) > 32'sd32000)
+                        tj_q8_8 <= 16'sd32000;
+                    else if ($signed(t_calc_r) < -32'sd10240)
+                        tj_q8_8 <= -16'sd10240;
+                    else
+                        tj_q8_8 <= t_calc_r[15:0];
+                    st <= S_WAIT;
                 end
 
                 default: st <= S_WAIT;
