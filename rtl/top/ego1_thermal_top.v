@@ -306,8 +306,11 @@ module ego1_thermal_top (
 
     // 常数除法在 FPGA 里是"乘高位 + 修正"的长进位链，改乘加近似：/100 ≈ ×2621 >> 18
     // 单位仍是 0.1 µs；16 bit 够到 6553 µs
-    wire [33:0] sw_mul = sw_max * 18'd2621;
-    assign switch_max_us = sw_mul[33:18];
+    // sw_max 是 clk_sys 拍数：1 拍 = 10 ns = 0.01 µs。
+    // 原来 /100 取整到 1 µs，仿真里 50 拍 → 恒 0，断言形同虚设；
+    // 改成 0.1 µs 单位（/10），16 bit 可表示到 6.55 ms，覆盖 1 ms 指标。
+    wire [33:0] sw_div10 = sw_max * 18'd205;      // /10 ≈ ×205 >> 11
+    assign switch_max_us = sw_div10[26:11];       // 单位 0.1 µs
 
     reg [15:0] samp_cnt;
     always @(posedge clk_sys or negedge rst_sys_n) begin
@@ -703,7 +706,9 @@ module ego1_thermal_top (
     // 显示
     //------------------------------------------------------------------
     wire        text_mode = sw[7];
-    wire signed [15:0] disp_val = text_mode ? text_filt : tj_filt;
+    // 显示必须用"标定后的原始值"而不是重滤波值：MA8 的窗口是 8×100 ms = 800 ms，
+    // 用 tj_filt 显示会把"端到端延迟 ≤200 ms"直接击穿（docs/01 §2.4 本来也是这么定的）
+    wire signed [15:0] disp_val = text_mode ? text_cal : tj_cal;
     wire [15:0] disp_abs = disp_val[15] ? (~disp_val + 16'd1) : disp_val;
     wire [15:0] t01 = (disp_abs * 16'd5) >> 7;        // 0.1 ℃ 单位
 
