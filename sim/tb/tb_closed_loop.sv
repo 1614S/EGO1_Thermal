@@ -38,6 +38,7 @@ module tb_closed_loop;
 
     integer kp_arg, ki_arg;
     real    t_start;
+    integer fd;                      // 轨迹 CSV（给 analyze_thermal.py 出图用）
 
     // 单档量测
     task run_phase(input signed [15:0] sp, input integer secs,
@@ -59,6 +60,10 @@ module tb_closed_loop;
                     if (d <= 1.0) hold = hold + 1; else hold = 0;
                     if (settle < 0 && hold >= 10) settle = tt * 0.001;
                     if (tt > (secs - 20) * 1000) sum = sum + d;
+                    if ((tt % 1000) == 0)
+                        $fdisplay(fd, "%0.2f,%0.2f,%0.2f,%0d,%0d,%0d",
+                                  tt * 0.001, tj, spc, u_dut.duty,
+                                  u_dut.gear, u_dut.vp_p_mw);
                     if ((tt % 20000) == 0)
                         $display("    t=%4.0f s  Tj=%6.2f  duty=%4d  rpm=%4d  state=%0d",
                                  tt * 0.001, tj, u_dut.duty, u_dut.vp_rpm, u_dut.state);
@@ -76,6 +81,8 @@ module tb_closed_loop;
     initial begin
         `INIT_TB
         $display("==== 闭环指标判分（虚拟热台，level=12，150 MHz） ====");
+        fd = $fopen(".work/closed_loop_trace.csv", "w");
+        $fdisplay(fd, "t_s,tj_c,tset_c,duty,gear,p_mw");
         if (!$value$plusargs("KP=%d", kp_arg)) kp_arg = `KP_DEF_Q8_8;
         if (!$value$plusargs("KI=%d", ki_arg)) ki_arg = `KI_DEF_Q8_8;
         $display("  Kp=%.2f duty/℃  Ki=%.4f duty/(℃·样本)", kp_arg/256.0, ki_arg/256.0);
@@ -98,6 +105,7 @@ module tb_closed_loop;
         `CHK(s1 > 0.0 && s1 <= 60.0, "40 ℃ 调节时间 ≤60 s")
         `CHK(s2 > 0.0 && s2 <= 60.0, "50 ℃ 调节时间 ≤60 s")
         `CHK(s3 > 0.0 && s3 <= 60.0, "60 ℃ 调节时间 ≤60 s")
+        $fclose(fd);
         `DONE("tb_closed_loop")
     end
 endmodule

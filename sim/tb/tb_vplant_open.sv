@@ -72,6 +72,7 @@ module tb_vplant_open;
     // ---------------- 量测工具 ----------------
     real  r2_now, t_exp, t_err, t0, tss, tau_meas;
     integer fails = 0;
+    integer fdo;   // 开环阶跃轨迹，给 analyze_thermal.py 拟合 τ
 
     task wait_ms(input integer n);
         integer i;
@@ -133,12 +134,17 @@ module tb_vplant_open;
         r2_now = 4096.0 / $itor(inv_r2);            // ≈28 K/W
         duty = 11'd1000; wait_ms(150000);              // 回到冷稳态
         t0 = ($itor(tj_uk)/1.0e6);
+        fdo = $fopen(".work/open_loop_step.csv", "w");
+        $fdisplay(fdo, "t_s,tj_c,tset_c,duty,gear,p_mw");
         duty = 11'd0;
         tau_meas = -1.0;
         for (tick_i = 0; tick_i < 160000; tick_i = tick_i + 1) begin
             @(posedge tick_ms);
+            if ((tick_i % 500) == 0)
+                $fdisplay(fdo, "%0.2f,%0.3f,0,0,0,%0d", tick_i*0.001, ($itor(tj_uk)/1.0e6), p_mw);
             if (tau_meas < 0 && ($itor(tj_uk)/1.0e6) >= t0 + 0.632*(tss - t0)) tau_meas = tick_i*0.001;
         end
+        $fclose(fdo);
         $display("[tau] 热阶跃: T0=%.2f Tss=%.2f  t63=%.1f s  (理论 (R1+R2)·C2 ≈ %.1f s)",
                  t0, tss, tau_meas, (3.0 + r2_now)*1.2);
         if (tau_meas < 15.0 || tau_meas > 60.0) begin
