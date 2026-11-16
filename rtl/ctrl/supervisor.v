@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 //======================================================================
 // supervisor.v —— 四级告警 + 迟滞 + 去抖 + 联锁
 //   NORMAL(0) -> WARN(1) -> HOT(2) -> CRIT(3)
@@ -70,20 +71,31 @@ module supervisor (
             end
 
             // ---------------- 状态迁移 ----------------
+            // 换级后必须清去抖计数，否则 up_cnt 饱和会让后续几级"免去抖"直接跳
             case (state)
                 ST_NORMAL: begin
-                    if (up_cnt >= UP_N-1 && tj_s >= warn_s) state <= ST_WARN;
+                    if (up_cnt >= UP_N-1 && tj_s >= warn_s) begin
+                        state <= ST_WARN; up_cnt <= 5'd0; dn_cnt <= 8'd0;
+                    end
                 end
                 ST_WARN: begin
-                    if (up_cnt >= UP_N-1 && tj_s >= hot_s)       state <= ST_HOT;
-                    else if (dn_cnt >= DN_N-1)                   state <= ST_NORMAL;
+                    if (up_cnt >= UP_N-1 && tj_s >= hot_s) begin
+                        state <= ST_HOT; up_cnt <= 5'd0; dn_cnt <= 8'd0;
+                    end else if (dn_cnt >= DN_N-1) begin
+                        state <= ST_NORMAL; up_cnt <= 5'd0; dn_cnt <= 8'd0;
+                    end
                 end
                 ST_HOT: begin
-                    if (up_cnt >= UP_N-1 && tj_s >= crit_s)      state <= ST_CRIT;
-                    else if (dn_cnt >= DN_N-1)                   state <= ST_WARN;
+                    if (up_cnt >= UP_N-1 && tj_s >= crit_s) begin
+                        state <= ST_CRIT; up_cnt <= 5'd0; dn_cnt <= 8'd0;
+                    end else if (dn_cnt >= DN_N-1) begin
+                        state <= ST_WARN; up_cnt <= 5'd0; dn_cnt <= 8'd0;
+                    end
                 end
                 ST_CRIT: begin
-                    if (clr_alarm && dn_cnt >= DN_N-1)           state <= ST_NORMAL;
+                    if (clr_alarm && dn_cnt >= DN_N-1) begin
+                        state <= ST_NORMAL; up_cnt <= 5'd0; dn_cnt <= 8'd0;
+                    end
                 end
                 default: state <= ST_NORMAL;
             endcase
@@ -95,8 +107,9 @@ module supervisor (
                 alarm <= 1'b0;
             end
 
+            // HOT = 过温降频：风扇满速 + 降档；CRIT 再加断负载与锁存
             fan_max  <= (state == ST_HOT) || (state == ST_CRIT);
-            gear_low <= (state == ST_CRIT);
+            gear_low <= (state == ST_HOT) || (state == ST_CRIT);
             load_en  <= (state != ST_CRIT);
         end
     end

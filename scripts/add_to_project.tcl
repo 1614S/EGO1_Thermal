@@ -28,14 +28,14 @@ foreach f $old {
 
 # ---- RTL ----
 set rtl_files {}
-foreach d {common clk acquire dsp ctrl load telemetry ui top} {
+foreach d {common clk acquire dsp ctrl load telemetry ui vplant top} {
     set g [glob -nocomplain $root/rtl/$d/*.v]
     if {[llength $g] > 0} {
         add_files -fileset sources_1 -norecurse $g
         set rtl_files [concat $rtl_files $g]
     }
 }
-set_property include_dirs [list $root/rtl/pkg] [get_filesets sources_1]
+set_property include_dirs [list $root/rtl/pkg $root/rtl/vplant] [get_filesets sources_1]
 
 # ---- 约束 ----
 add_files -fileset constrs_1 -norecurse [list $root/constr/ego1_pins.xdc $root/constr/timing.xdc]
@@ -63,3 +63,4 @@ puts "INFO: rtl=[llength $rtl_files] tb=[llength $tb_files] models=[llength $md_
 # 关键：写回 .xpr
 close_project
 puts "INFO: project saved -> $xpr"
+

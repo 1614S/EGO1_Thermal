@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 //======================================================================
 // xadc_frontend.v —— XADC 结温采集（DRP 轮询 0x00 温度通道）
 //
@@ -15,20 +16,26 @@ module xadc_frontend #(
     input  wire               clk,
     input  wire               rst_n,
     input  wire               tick_ms,
+    // 虚拟热台：plant_sel=1 时由 xadc_vplant 接管 DRP，下游逻辑完全无感
+    input  wire               plant_sel,
+    input  wire signed [31:0] vp_tj_uk,
+    input  wire        [31:0] vp_p_mw,
     output reg  signed [15:0] tj_q8_8,
     output reg                tj_valid,      // 单拍
     output reg  [11:0]        code_raw
 );
 
     //------------------------------------------------------------------
-    // DRP 总线
+    // DRP 总线（真实器件与虚拟器件二选一，靠 plant_sel 切换）
     //------------------------------------------------------------------
     reg         den;
     reg         dwe;
     reg  [6:0]  daddr;
     reg  [15:0] di;
-    wire [15:0] drp_do;
-    wire        drdy;
+    wire [15:0] x_do, v_do;
+    wire        x_drdy, v_drdy;
+    wire [15:0] drp_do = plant_sel ? v_do   : x_do;
+    wire        drdy   = plant_sel ? v_drdy : x_drdy;
 
     localparam [2:0] S_HOLD  = 3'd0;
     localparam [2:0] S_WAIT  = 3'd1;
@@ -124,8 +131,8 @@ module xadc_frontend #(
         .daddr (daddr),
         .di    (di),
         .dwe   (dwe),
-        .dout  (drp_do),
-        .drdy  (drdy)
+        .dout  (x_do),
+        .drdy  (x_drdy)
     );
 `else
     XADC #(
@@ -144,8 +151,8 @@ module xadc_frontend #(
         .ALM         (),
         .BUSY        (),
         .CHANNEL     (),
-        .DO          (drp_do),
-        .DRDY        (drdy),
+        .DO          (x_do),
+        .DRDY        (x_drdy),
         .EOC         (),
         .EOS         (),
         .JTAGBUSY    (),
@@ -159,5 +166,26 @@ module xadc_frontend #(
         .VP          (1'b0)
     );
 `endif
+
+    //------------------------------------------------------------------
+    // 虚拟 XADC：同一个 DRP 口，plant_sel 时接管
+    //------------------------------------------------------------------
+    wire [15:0] vp_code_mon, vp_drp_cnt;
+
+    xadc_vplant u_vxadc (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .en        (plant_sel),
+        .tj_uk     (vp_tj_uk),
+        .p_mw      (vp_p_mw),
+        .den       (den),
+        .dwe       (dwe),
+        .daddr     (daddr),
+        .di        (di),
+        .dout      (v_do),
+        .drdy      (v_drdy),
+        .code_mon  (vp_code_mon),
+        .err_cnt   (vp_drp_cnt)
+    );
 
 endmodule

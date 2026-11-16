@@ -1,6 +1,7 @@
+`timescale 1ns/1ps
 //======================================================================
 // acq_fsm.v —— 统一采集调度：每 100 ms 锁存一次双源数据 + 时间戳
-// 外部传感器（AM2301）更新慢，用 ext_age 记录数据龄期（单位 100 ms）。
+// 外部传感器（AM2301）更新慢，用 ext_age 记录数据龄期，单位 100 ms，饱和 255。
 //======================================================================
 `include "ego1_thermal_pkg.vh"
 
@@ -51,7 +52,7 @@ module acq_fsm (
                         ext_age   <= 16'd0;
                         text_seen <= 1'b0;
                     end else if (ext_age < 16'd255) begin
-                        ext_age <= ext_age + 16'd100;
+                        ext_age <= ext_age + 16'd1;   // 100 ms 为单位（AM2301 的 2 s → 20）
                     end
                     sample_valid <= 1'b1;
                 end else begin
@@ -62,3 +63,4 @@ module acq_fsm (
     end
 
 endmodule
+

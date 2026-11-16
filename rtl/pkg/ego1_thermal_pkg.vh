@@ -42,8 +42,8 @@
 `define TH_CRIT_Q8_8        (16'sd19456)      // 76.0 ℃
 
 // PI 默认参数
-`define KP_DEF_Q8_8         (16'sd10240)       // 40.0 duty/℃
-`define KI_DEF_Q8_8         (16'sd38)         // 0.05 duty/(℃·样本)
+`define KP_DEF_Q8_8         (16'd51200)        // 200.0 duty/℃（虚拟热台上整定，见 .work/03_整定记录.md）
+`define KI_DEF_Q8_8         (16'd256)          // 1.0 duty/(℃·样本)
 
 //--------------------------------------------------------------------
 // 档位：MMCM VCO = 1200 MHz，CLKOUT1 整数分频
@@ -64,3 +64,4 @@
 `define FRAME_TYPE_EVENT    8'h02
 
 `endif // EGO1_THERMAL_PKG_VH
+
