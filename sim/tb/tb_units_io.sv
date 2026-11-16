@@ -113,6 +113,13 @@ module tb_frame;
         crc_c = 16'hFFFF;
         for (i = 2; i <= 29; i = i + 1) crc_c = crc_step(crc_c, cap[i]);
         `CHK({cap[31], cap[30]} == crc_c, "CRC16 覆盖字节 2–29")
+        // 把整帧导成一行 hex，交给 sw/host_logger.py 交叉验证（两套独立实现对齐）
+        begin : dump_frame
+            integer k;
+            $write("FRAME_HEX=");
+            for (k = 0; k < 32; k = k + 1) $write("%02x", cap[k]);
+            $write("\n");
+        end
         $display("  32 B OK，CRC=%04h", {cap[31], cap[30]});
         `DONE("tb_frame")
     end
@@ -159,5 +166,6 @@ module tb_uart115;
         `DONE("tb_uart115")
     end
 endmodule
+
 
 

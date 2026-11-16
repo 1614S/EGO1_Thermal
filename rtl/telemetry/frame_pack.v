@@ -32,6 +32,9 @@ module frame_pack (
     // 字段锁存
     //------------------------------------------------------------------
     reg [15:0] seq_r, rh_r, f_r, p_r;
+    // 湿度字段按文档发 0.1 %RH：rh 内部是 Q8.8，×10>>8 换算（14080 → 550）
+    wire [31:0] rh_tmp = rh_r * 32'd10;        // 32 位上下文，否则 14080×10 会截断（踩过）
+    wire [15:0] rh10   = rh_tmp[23:8];
     reg [31:0] ts_r;
     reg signed [15:0] tj_r, text_r, tset_r;
     reg [10:0] duty_r;
@@ -78,8 +81,8 @@ module frame_pack (
                 5'd11: byte_at = tj_r[15:8];
                 5'd12: byte_at = text_r[7:0];
                 5'd13: byte_at = text_r[15:8];
-                5'd14: byte_at = rh_r[7:0];
-                5'd15: byte_at = rh_r[15:8];
+                5'd14: byte_at = rh10[7:0];
+                5'd15: byte_at = rh10[15:8];
                 5'd16: byte_at = tset_r[7:0];
                 5'd17: byte_at = tset_r[15:8];
                 5'd18: byte_at = {5'd0, duty_r[2:0]};
@@ -188,3 +191,4 @@ module frame_pack (
     end
 
 endmodule
+

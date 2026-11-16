@@ -57,6 +57,22 @@ call :run tb_vplant_sys   "%ROOT%\sim\tb\tb_vplant_sys.sv" 10000
 
 if /i "%~1"=="full" call :closed
 
+rem ---- 帧格式交叉验证：RTL 的 frame_pack 与 Python 的 host_logger 必须解出同样字段 ----
+where python >nul 2>nul
+if errorlevel 1 goto cmp_skip
+python "%ROOT%\sw\check_frame_compat.py" > "%ROOT%\.work\iv\compat.log" 2>&1
+if errorlevel 1 goto cmp_fail
+echo [PASS] 帧格式交叉验证>>"%REPORT%"
+set /a PASS+=1
+goto cmp_done
+:cmp_fail
+echo [FAIL] 帧格式交叉验证>>"%REPORT%"
+set /a FAIL+=1
+goto cmp_done
+:cmp_skip
+echo [SKIP] python 不在 PATH，跳过帧格式交叉验证>>"%REPORT%"
+:cmp_done
+
 echo.
 echo ================= ????? =================
 type "%REPORT%"
