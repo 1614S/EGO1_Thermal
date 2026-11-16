@@ -63,6 +63,10 @@ module tb_iir;
 
     initial begin
         `INIT_TB
+        if ($test$plusargs("DUMP")) begin
+            $dumpfile(".work/iv/e02_iir.vcd");
+            $dumpvars(0, tb_iir);
+        end
         $display("---- tb_iir ----");
         repeat (3) @(posedge clk);
         rst_n = 1'b1;

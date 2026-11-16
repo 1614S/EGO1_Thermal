@@ -94,8 +94,10 @@ module tb_vplant_if;
     // ---------------- 主流程 ----------------
     task drp_read(input [6:0] a);
         begin
+            $dumpon;
             daddr = a; den = 1'b1; @(posedge clk); #1 den = 1'b0;   // #1 避免与时钟沿竞争
             repeat (6) @(posedge clk);   // DRP 从机 4 拍出 drdy，固定等 6 拍更稳
+            $dumpoff;
             
         end
     endtask
@@ -111,6 +113,12 @@ module tb_vplant_if;
     end
 
     initial begin
+        if ($test$plusargs("DUMP")) begin
+            $dumpfile(".work/iv/e01_drp.vcd");
+            $dumpvars(1, tb_vplant_if);          // 只抓本层信号 + 虚拟 XADC，否则 VCD 会几百 MB
+            $dumpvars(0, tb_vplant_if.u_vxadc);
+            $dumpoff;                              // 只在 DRP 读的那几拍打开，避免 VCD 爆掉
+        end
         $display("==== 虚拟器件接口自检 ====");
         repeat (5) @(posedge clk);
         rst_n = 1'b1;
@@ -150,6 +158,8 @@ module tb_vplant_if;
         $finish;
     end
 endmodule
+
+
 
 
 

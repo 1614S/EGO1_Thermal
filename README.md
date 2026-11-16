@@ -16,6 +16,12 @@ XADC 结温 + AM2301 外部温湿度 → 统一采集 → 滤波/标定 → PI+�
 | `am2301_vplant` | 真 40 bit 1-Wire 时序应答 + 校验和 + 每 N 帧注入校验错 |
 | `ambient_vplant` | 随机慢漂 + 空调阶跃 ±4 ℃ 随时触发 |
 
+### 报告图（`docs/figs/`）
+
+E-01 DRP 读时序、E-02 IIR 阶跃、E-05 开环 τ 拟合、E-06 闭环 50 ℃ 曲线 ——
+都能用 `scripts\regress.bat` + `sim/tools/vcd2svg.py` + `sw/analyze_thermal.py` 从当前 RTL 重新生成，
+详见 [`docs/06_图表清单.md`](docs/06_图表清单.md)。
+
 ### 命令通道（PuTTY 115200，直接敲）
 
 | 命令 | 作用 |
