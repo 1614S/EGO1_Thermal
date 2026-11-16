@@ -70,4 +70,5 @@ t_s,tj_c,tset_c,duty,gear,p_mw
 
 ### 待补
 
-- 与 `frame_pack.v` 的 32 B 帧格式对接的串口采集脚本（`host_logger.py`），等实测阶段再补。
+- ~~串口采集脚本~~ → 已完成，见 `host_logger.py`（32 B 帧解码 + CRC 校验 + CSV 落盘，
+  输出列与 `analyze_thermal.py` 对齐）。上板采集纪律见 `docs/05_实测数据采集说明.md`。
