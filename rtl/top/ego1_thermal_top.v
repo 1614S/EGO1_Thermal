@@ -383,8 +383,27 @@ module ego1_thermal_top (
     wire signed [16:0] ff_dt   = $signed({1'b0, setpoint}) - $signed({1'b0, ta_est});
     wire signed [24:0] ff_mul  = $signed(ff_dt_r) * 8'sd40;    // 17×8，1 个 DSP
     wire signed [31:0] ff_calc = `VP_FF_A - {{7{ff_mul[24]}}, ff_mul[24:8]};
-    wire        [10:0] ff_duty_c = (ff_calc_r >= 32'sd1000) ? 11'd1000 :
+    //------------------------------------------------------------------
+    // 前馈要跟着实际功耗走。
+    // 原来的 u_ff = 1528 − 40·(sp − Ta) 是按 level15/150MHz（≈1.35 W）标定的；
+    // 一旦自动调频把档位降下来（例如 750 mW），同样的温升只需要更小的风量，
+    // 前馈却仍按 1.35 W 给，积分只能往负里压 —— 上板实测 60→40 ℃ 时停在
+    // 38.5 ℃（差 1.54 ℃）。这里按实测功耗对前馈做线性折算。
+    //   scale = p_est / 1350，Q8 表示（256 = 1.0），限幅 0.25…1.25
+    //------------------------------------------------------------------
+    wire [31:0] ff_scale_raw = p_est * 32'd49;            // 49/256 ≈ 1/5.22 → 即 p/1350 的 Q8
+    reg  [8:0]  ff_scale_q8;
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n) ff_scale_q8 <= 9'd256;
+        else            ff_scale_q8 <= (ff_scale_raw[16:8] > 9'd320) ? 9'd320
+                                      : (ff_scale_raw[16:8] < 9'd64)  ? 9'd64
+                                      :  ff_scale_raw[16:8];
+    end
+
+    wire        [10:0] ff_base_c = (ff_calc_r >= 32'sd1000) ? 11'd1000 :
                                    (ff_calc_r <= 32'sd0)    ? 11'd0    : ff_calc_r[10:0];
+    wire        [19:0] ff_sc_mul = ff_base_c * ff_scale_q8;   // 11×9
+    wire        [10:0] ff_duty_c = (ff_sc_mul[18:8] > 11'd1000) ? 11'd1000 : ff_sc_mul[18:8];
 
     always @(posedge clk_sys or negedge rst_sys_n) begin
         if (!rst_sys_n) begin
@@ -741,11 +760,12 @@ module ego1_thermal_top (
     assign led[1]    = (state >= 2'd2);
     assign led[2]    = (state == 2'd3);
     assign led[3]    = ~locked;
-    assign led[7:4]  = {1'b0, gear};
+    assign led[6:4]  = gear;              // 档位（3 bit）；led[7] 单独给风扇故障
     assign led[7]    = fan_fail;          // 风扇堵转/断线指示
     assign led[15:8] = heart[23:16];
 
 endmodule
+
 
 
 

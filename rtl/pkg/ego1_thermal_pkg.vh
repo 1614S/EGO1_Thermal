@@ -16,8 +16,17 @@
 // 仿真加速：只缩放“ms 时基”，不缩放 UART/AM2301 等真实时序
 // 用法：xvlog -d SIM_MODEL -d SIM_ACCEL=100 ...
 //--------------------------------------------------------------------
-`ifndef SIM_ACCEL
-  `define SIM_ACCEL           1000
+`ifdef SIM_MODEL
+  `ifndef SIM_ACCEL
+    `define SIM_ACCEL         1000        // 仿真默认加速 1000x
+  `endif
+`else
+  `ifndef SIM_ACCEL
+    `define SIM_ACCEL         1           // 硬件构建必须为 1
+    // 曾经这里无条件写 1000（不在 SIM_MODEL 里判），导致真实比特流的
+    // tick_ms 快 1000 倍：帧率 357 帧/s、XADC 来不及转换、Tj 直接读到 125℃ 饱和。
+    // 仿真永远带 -DSIM_ACCEL，所以永远测不出这个问题 —— 只有上板才会暴露。
+  `endif
 `endif
 
 `ifdef SIM_MODEL

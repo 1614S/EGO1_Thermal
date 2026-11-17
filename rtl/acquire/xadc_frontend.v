@@ -44,12 +44,26 @@ module xadc_frontend #(
     localparam [2:0] S_CONV  = 3'd4;   // 换算流水级（拆开组合路径，保 100 MHz）
 
     reg [2:0]  st;
+    reg [20:0] drdy_to;         // DRDY 超时计数
+    reg [15:0] timeout_cnt;     // 累计超时次数（监测）
     reg [31:0] t_calc_r;
     reg [15:0] ms_cnt;
     reg [15:0] hold_cnt;
 
     // code*63/2 - 69926，32 位补码；正常范围 -10240…32000
     wire [31:0] t_calc = ((drp_do[11:0] * 16'd63) >> 1) - 32'd69926;
+
+    // 单通道模式下 XADC 不会自己转换，必须靠 CONVST 的上升沿启动；
+    // 原来 CONVST 接死 0，导致温度寄存器一直是无效值（上板实测 0xFFF）。
+    wire convst = tick_ms;
+
+    // 单通道模式还可以用 CONVSTCLK 作转换触发（UG480：两者任一有效即可），
+    // 这里再给一个 1 MHz 的触发时钟，双保险。
+    reg [6:0] ck_div;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) ck_div <= 7'd0;
+        else ck_div <= (ck_div >= 7'd99) ? 7'd0 : ck_div + 7'd1;
+    wire conv_clk = (ck_div < 7'd50);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -64,6 +78,8 @@ module xadc_frontend #(
             tj_valid <= 1'b0;
             code_raw <= 12'd0;
             t_calc_r <= 32'd0;
+            drdy_to  <= 21'd0;
+            timeout_cnt <= 16'd0;
         end else begin
             tj_valid <= 1'b0;
             den      <= 1'b0;
@@ -73,7 +89,7 @@ module xadc_frontend #(
                 // 上电等 10 ms，让 XADC 完成自校准
                 S_HOLD: begin
                     if (tick_ms) begin
-                        if (hold_cnt >= 16'd10) st <= S_WAIT;
+                        if (hold_cnt >= 16'd100) st <= S_WAIT;   // 100 ms：自校准留足余量
                         else hold_cnt <= hold_cnt + 16'd1;
                     end
                 end
@@ -85,7 +101,7 @@ module xadc_frontend #(
                             ms_cnt <= 16'd0;
                             den    <= 1'b1;
                             dwe    <= 1'b0;
-                            daddr  <= 7'h00;
+                            daddr  <= 7'h00;   // 温度通道
                             st     <= S_ISSUE;
                         end else begin
                             ms_cnt <= ms_cnt + 16'd1;
@@ -97,10 +113,20 @@ module xadc_frontend #(
 
                 // 第一级：乘法 + 减法（DSP48 + 进位链），结果打一拍
                 S_DRDY: begin
+                    // 超时保护：DRP 正常 4 拍就回 drdy，200 µs 还没来就是异常，
+                    // 直接回 S_WAIT 重发一次。没有这个分支，一次脏读就会让整个
+                    // 采集永久卡死（上板实测过：Tj 永远停在 125 ℃ 饱和值）。
                     if (drdy) begin
                         code_raw <= drp_do[11:0];
                         t_calc_r <= t_calc;
+                        drdy_to  <= 21'd0;
                         st       <= S_CONV;
+                    end else if (drdy_to >= 21'd20000) begin
+                        drdy_to  <= 21'd0;
+                        timeout_cnt <= timeout_cnt + 16'd1;
+                        st       <= S_WAIT;
+                    end else begin
+                        drdy_to  <= drdy_to + 21'd1;
                     end
                 end
 
@@ -135,12 +161,25 @@ module xadc_frontend #(
         .drdy  (x_drdy)
     );
 `else
+    //------------------------------------------------------------------
+    // 配置值来源：XADC Wizard（Continuous + 只使能温度 + DRP）生成的
+    // INIT 序列，直接从它的 xadc_probe.v 里抄出来，不再手猜寄存器位。
+    //   0x31A0 : CFG1，SEQ=0011 → 连续序列模式并在序列里使能温度通道
+    //   0x0400 : CFG2，DCLK/ADCCLK 分频 = 4 → ADCCLK = 100/4 = 25 MHz（≤26 MHz）
+    //   0x0100 : CFG4，序列通道选择（温度通道）
+    // 之前手写的 0x0000/0x0800 是"单通道模式 + 分频 8"，
+    // 结果是温度寄存器永远读到无效值 0xFFF（上板实测）。
+    //------------------------------------------------------------------
     XADC #(
-        .INIT_40 (16'h0000),
-        .INIT_41 (16'h0000),
-        .INIT_42 (16'h0800)
+        .INIT_40 (16'h0000),   // CFG0：无平均
+        .INIT_41 (16'h31A0),   // CFG1：连续序列 + 使能温度
+        .INIT_42 (16'h0400),   // CFG2：DCLK 分频 4
+        .INIT_48 (16'h0100),   // CFG4：序列通道选择
+        .INIT_49 (16'h0000),
+        .INIT_4A (16'h0000),
+        .INIT_4B (16'h0000)
     ) u_xadc (
-        .CONVST      (1'b0),
+        .CONVST      (1'b0),          // 连续序列模式内部自动触发
         .CONVSTCLK   (1'b0),
         .DADDR       (daddr),
         .DCLK        (clk),
@@ -189,3 +228,9 @@ module xadc_frontend #(
     );
 
 endmodule
+
+
+
+
+
+
