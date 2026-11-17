@@ -51,7 +51,10 @@ module xadc_frontend #(
     reg [15:0] hold_cnt;
 
     // code*63/2 - 69926，32 位补码；正常范围 -10240…32000
-    wire [31:0] t_calc = ((drp_do[11:0] * 16'd63) >> 1) - 32'd69926;
+    // XADC 的测量结果在 DO[15:4]（高位对齐，低 4 位恒 0），不是 DO[11:0]。
+    // 取低 12 位等于把码值缩小 16 倍，上板表现为 Tj 在 −40…−3 ℃ 之间乱跳。
+    wire [11:0] adc_code = drp_do[15:4];
+    wire [31:0] t_calc = ((adc_code * 16'd63) >> 1) - 32'd69926;
 
     // 单通道模式下 XADC 不会自己转换，必须靠 CONVST 的上升沿启动；
     // 原来 CONVST 接死 0，导致温度寄存器一直是无效值（上板实测 0xFFF）。
@@ -117,7 +120,7 @@ module xadc_frontend #(
                     // 直接回 S_WAIT 重发一次。没有这个分支，一次脏读就会让整个
                     // 采集永久卡死（上板实测过：Tj 永远停在 125 ℃ 饱和值）。
                     if (drdy) begin
-                        code_raw <= drp_do[11:0];
+                        code_raw <= adc_code;
                         t_calc_r <= t_calc;
                         drdy_to  <= 21'd0;
                         st       <= S_CONV;

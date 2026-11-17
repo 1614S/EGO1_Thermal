@@ -126,17 +126,17 @@ module tb_vplant_if;
 
         // ---- DRP: 温度通道 ----
         drp_read(7'h00);
-        t_dec = $itor(vp_dout) * 503.975 / 4096.0 - 273.15;
+        t_dec = $itor(vp_dout[15:4]) * 503.975 / 4096.0 - 273.15;
         // 期望：45.0 ℃ 经 增益0.998 + 偏置+1.8 → 约 46.18 ℃
-        $display("[DRP] addr=00 code=%0d → %.3f C（期望 ≈46.18 C，含 ±0.15 C 噪声）", vp_dout, t_dec);
+        $display("[DRP] addr=00 code=%0d → %.3f C（期望 ≈46.18 C，含 ±0.15 C 噪声）", vp_dout[15:4], t_dec);
         if (t_dec < 45.4 || t_dec > 46.9) begin
             $display("  [FAIL] 温度码与误差模型不符"); fails = fails + 1;
         end
 
         // ---- DRP: VCCINT ----
         drp_read(7'h01);
-        $display("[DRP] addr=01 VCCINT code=%0d (%.3f V)", vp_dout, $itor(vp_dout)*3.0/4096.0);
-        if (vp_dout < 12'd1200 || vp_dout > 12'd1366) begin
+        $display("[DRP] addr=01 VCCINT code=%0d (%.3f V)", vp_dout[15:4], $itor(vp_dout[15:4])*3.0/4096.0);
+        if (vp_dout[15:4] < 12'd1200 || vp_dout[15:4] > 12'd1366) begin
             $display("  [FAIL] VCCINT 码不合理"); fails = fails + 1;
         end
 
@@ -158,6 +158,7 @@ module tb_vplant_if;
         $finish;
     end
 endmodule
+
 
 
 

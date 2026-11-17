@@ -43,6 +43,7 @@ module xadc_vplant (
     reg [1:0]  st;
     reg [6:0]  addr_r;
     reg [15:0] do_r;
+    reg [15:0] code_tmp;
     reg [15:0] lfsr;
 
     // 温度（1.024 mK 单位，20 bit 有效）
@@ -99,9 +100,11 @@ module xadc_vplant (
                     st    <= 2'd2;
                 end
                 2'd2: begin                            // 三级：转码（1 个 DSP）
-                    do_r <= (addr_r == 7'h00) ? code_of(t_err + T0_U) :
-                            (addr_r == 7'h01) ? {4'd0, code_vccint} :
-                            (addr_r == 7'h02) ? {4'd0, code_vccaux} : 16'h0000;
+                    // 与真实 XADC 一致：12 位结果高位对齐放在 DO[15:4]
+                    code_tmp = code_of(t_err + T0_U);
+                    do_r <= (addr_r == 7'h00) ? {code_tmp[11:0], 4'b0000} :
+                            (addr_r == 7'h01) ? {code_vccint, 4'b0000} :
+                            (addr_r == 7'h02) ? {code_vccaux, 4'b0000} : 16'h0000;
                     st   <= 2'd3;
                 end
                 default: begin                         // 四级：DRDY + DO
@@ -120,6 +123,7 @@ module xadc_vplant (
     end
 
 endmodule
+
 
 
 
