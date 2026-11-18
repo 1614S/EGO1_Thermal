@@ -35,6 +35,12 @@ foreach d {common clk acquire dsp ctrl load telemetry ui vplant top} {
         set rtl_files [concat $rtl_files $g]
     }
 }
+# ---- 头文件（.vh 必须显式加入，否则 Vivado 会另存一份 imports 副本）----
+set hdr_files [glob -nocomplain $root/rtl/*/*.vh]
+if {[llength $hdr_files] > 0} {
+    add_files -fileset sources_1 -norecurse $hdr_files
+    set_property file_type "Verilog Header" [get_files $hdr_files]
+}
 set_property include_dirs [list $root/rtl/pkg $root/rtl/vplant] [get_filesets sources_1]
 
 # ---- 约束 ----
@@ -48,7 +54,7 @@ if {[llength $md_files] > 0} { add_files -fileset sim_1 -norecurse $md_files }
 if {[llength $tb_files] > 0} {
     set_property file_type SystemVerilog [get_files $tb_files]
 }
-set_property include_dirs [list $root/rtl/pkg $root/sim/tb] [get_filesets sim_1]
+set_property include_dirs [list $root/rtl/pkg $root/rtl/vplant $root/sim/tb] [get_filesets sim_1]
 # GUI 行为仿真必须定义 SIM_MODEL：否则例化真实 XADC/MMCM 原语，
 # TB 里的 tj_c 注入点不存在（VRFC 10-2991）
 set_property verilog_define {SIM_MODEL} [get_filesets sim_1]

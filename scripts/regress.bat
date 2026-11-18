@@ -10,8 +10,10 @@ rem ?????"?????ür??"????????
 rem =====================================================================
 setlocal enabledelayedexpansion
 set ROOT=%~dp0..
-set IVERILOG=D:\Apps\iverilog\bin\iverilog.exe
-set VVP=D:\Apps\iverilog\bin\vvp.exe
+set IVERILOG=
+for %%p in ("C:\iverilog\bin\iverilog.exe" "D:\Apps\iverilog\bin\iverilog.exe") do if not defined IVERILOG if exist %%p set IVERILOG=%%~p
+if not defined IVERILOG for %%i in (iverilog.exe) do set IVERILOG=%%~$PATH:i
+set VVP=%IVERILOG:iverilog.exe=vvp.exe%
 if not exist "%IVERILOG%" (
     echo [ERR] ????? Icarus Verilog: %IVERILOG%
     echo       ???? Vivado ???xelab ??? top???? xsim -runall
