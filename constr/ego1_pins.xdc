@@ -82,7 +82,7 @@ set_property -dict {PACKAGE_PIN T4 IOSTANDARD LVCMOS33} [get_ports uart_tx]
 # Pmod：exp_io0/1/2 = B16 A15 A13
 #   exp_io0 -> fan_pwm（4 线风扇 PWM 输入）
 #   exp_io1 -> fan_tach（风扇转速反馈，外部上拉）
-#   exp_io2 -> dht_dq（AM2301 单总线，外部 4.7k 上拉到 3.3V）
+#   exp_io2 -> dht_dq（AM2302 单总线，外部 4.7k 上拉到 3.3V）
 #-----------------------------------------------------------------------
 set_property -dict {PACKAGE_PIN B16 IOSTANDARD LVCMOS33} [get_ports fan_pwm]
 set_property -dict {PACKAGE_PIN A15 IOSTANDARD LVCMOS33} [get_ports fan_tach]
