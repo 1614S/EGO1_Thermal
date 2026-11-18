@@ -83,6 +83,7 @@ module tb_top_smoke;
     reg signed [15:0] last_text = 16'sd0;
     reg        done_d = 1'b0;
     integer    i;
+    real       lat_ns, lat_ms;
 
     always @(posedge clk) begin
         done_d <= 1'b0;
@@ -147,6 +148,33 @@ module tb_top_smoke;
 
         #6ms;                    // 共 10 ms
 
+        //------------------------------------------------------------------
+        // 端到端延迟：把注入温度阶跃 +10 ℃，量"显示器数值变化"用了多久。
+        // 显示源必须是标定后的原始值（若误用 MA8/IIR 的滤波值，这里会 >800 ms）
+        // 时间换算：SIM_ACCEL=1000 → 1 物理 ms = 1 000 ns 仿真时间
+        //------------------------------------------------------------------
+        begin : lat_measure
+            integer cyc;
+            reg [15:0] t01_old;
+            t01_old = u_dut.t01;
+            `ifdef SIM_MODEL
+            u_dut.u_xadc_fe.u_xadc.tj_c = 55.0;      // 45 → 55 ℃
+            `endif
+            for (cyc = 0; cyc < 400000; cyc = cyc + 1) begin
+                @(posedge clk);
+                if (u_dut.t01 != t01_old) begin
+                    lat_ns = cyc * 10;               // 100 MHz
+                    disable lat_measure;
+                end
+            end
+            lat_ns = -1;
+        end
+        lat_ms = lat_ns / 1000.0;                    // 仿真 ns → 物理 ms（ACCEL=1000）
+        $display("[TB] 端到端延迟（采样→显示）: %0.1f ms（要求 ≤200 ms）", lat_ms);
+        if (lat_ms < 0.0 || lat_ms > 200.0) begin
+            $display("  [FAIL] 端到端延迟超标（显示可能误用了重滤波值）");
+        end
+
         $display("---------------------------------------------");
         $display("[TB] frames=%0d  crc_err=%0d  hdr_err=%0d  tj=%0d (%.2f C) ext=%0d (%.2f C)",
                  nframe, crc_err, hdr_err, last_tj, last_tj/256.0, last_text, last_text/256.0);
@@ -157,7 +185,8 @@ module tb_top_smoke;
         if ((nframe >= 20) && (crc_err == 0) && (hdr_err == 0) &&
             (last_tj > 16'sd11000) && (last_tj < 16'sd11900) &&
             (u_dut.f_meas > 16'd1470) && (u_dut.f_meas < 16'd1530) &&
-            (u_dut.switch_max_us < 16'd1000)) begin
+            (u_dut.switch_max_us > 16'd0) &&      // 证明真的在测（原来恒 0 也过）
+            (u_dut.switch_max_us < 16'd10000)) begin   // 单位 0.1 µs → 1 ms = 10000
             $display("TEST PASSED (tb_top_smoke)");
             if (last_text == 16'sd0)
                 $display("NOTE: AM2301 通道仍未输出有效值（已知问题，见 README）");
@@ -170,3 +199,4 @@ module tb_top_smoke;
     end
 
 endmodule
+

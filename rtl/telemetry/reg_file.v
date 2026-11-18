@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 //======================================================================
 // reg_file.v —— 32 个 32 bit 寄存器（RW 配置 + RO 状态）
 // 地址见 docs/01_架构与仿真方案.md 表 5.3
@@ -82,7 +83,7 @@ module reg_file (
         r_cal_b    = 16'h0000;
         r_gear     = 16'd3;              // 100 MHz
         r_duty_man = 16'd0;
-        r_ctrl     = 4'b0110;            // load_en=1, fan_man=0, auto_gear=1, log_en=0
+        r_ctrl     = 4'b1000;            // load_en=1, fan_man=0, auto_gear=0(手动档，sw5 开自动), log_en=0
         r_scratch  = 32'h0;
     end
 
@@ -101,7 +102,7 @@ module reg_file (
             r_cal_b    <= 16'h0000;
             r_gear     <= 16'd3;
             r_duty_man <= 16'd0;
-            r_ctrl     <= 4'b0110;
+            r_ctrl     <= 4'b1000;
             r_scratch  <= 32'h0;
         end else if (wr_en) begin
             case (wr_addr)
@@ -110,7 +111,7 @@ module reg_file (
                 6'h05: r_gear     <= wr_data[15:0];
                 6'h06: r_duty_man <= wr_data[15:0];
                 6'h07: r_kp       <= wr_data[15:0];
-                6'h08: r_ki       <= wr_data[15:0];
+                6'h08: r_ki       <= {4'd0, wr_data[11:0]};   // Ki ≤ 15.996，保证积分乘法位宽可控
                 6'h09: r_warn     <= wr_data[15:0];
                 6'h0A: r_hot      <= wr_data[15:0];
                 6'h0B: r_crit     <= wr_data[15:0];
@@ -161,3 +162,6 @@ module reg_file (
     end
 
 endmodule
+
+
+

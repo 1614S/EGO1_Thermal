@@ -19,8 +19,9 @@ add_files -fileset sources_1 [glob -nocomplain $root/rtl/ctrl/*.v]
 add_files -fileset sources_1 [glob -nocomplain $root/rtl/load/*.v]
 add_files -fileset sources_1 [glob -nocomplain $root/rtl/telemetry/*.v]
 add_files -fileset sources_1 [glob -nocomplain $root/rtl/ui/*.v]
+add_files -fileset sources_1 [glob -nocomplain $root/rtl/vplant/*.v]
 add_files -fileset sources_1 [glob -nocomplain $root/rtl/top/*.v]
-set_property include_dirs [list $root/rtl/pkg] [get_filesets sources_1]
+set_property include_dirs [list $root/rtl/pkg $root/rtl/vplant] [get_filesets sources_1]
 
 # 约束
 add_files -fileset constrs_1 $root/constr/ego1_pins.xdc
@@ -37,3 +38,4 @@ set_property top tb_top_smoke [get_filesets sim_1]
 update_compile_order -fileset sources_1
 
 puts "INFO: project created at $root/prj"
+

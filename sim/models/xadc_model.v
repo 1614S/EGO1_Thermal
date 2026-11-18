@@ -39,15 +39,15 @@ module xadc_model (
                         code = (tj_c + 273.15) * 4096.0 / 503.975;
                         if (code < 0)    code = 0;
                         if (code > 4095) code = 4095;
-                        dout <= {4'h0, code[11:0]};
+                        dout <= {code[11:0], 4'h0};   // 与真实 XADC 一致：高位对齐（DO[15:4]）
                     end
                     7'h01: begin
                         code = vccint * 4096.0 / 3.0;
-                        dout <= {4'h0, code[11:0]};
+                        dout <= {code[11:0], 4'h0};   // 与真实 XADC 一致：高位对齐（DO[15:4]）
                     end
                     7'h02: begin
                         code = vccaux * 4096.0 / 3.0;
-                        dout <= {4'h0, code[11:0]};
+                        dout <= {code[11:0], 4'h0};   // 与真实 XADC 一致：高位对齐（DO[15:4]）
                     end
                     default: dout <= 16'h0000;
                 endcase
@@ -59,3 +59,4 @@ module xadc_model (
     end
 
 endmodule
+
