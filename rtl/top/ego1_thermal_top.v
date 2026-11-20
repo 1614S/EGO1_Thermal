@@ -16,7 +16,7 @@ module ego1_thermal_top (
     input  wire [7:0]  sw,
     output wire [15:0] led,
     output wire [7:0]  seg,
-    output wire [3:0]  an,
+    output wire [7:0]  an,           // 低 4 位扫描，高 4 位恒灭
     output wire        uart_tx,
     input  wire        uart_rx,
     output wire        fan_pwm,
@@ -741,11 +741,17 @@ module ego1_thermal_top (
     wire [3:0]  d2_raw = t_div100[3:0];
     wire [3:0]  d2 = (d2_raw > 4'd9) ? (d2_raw - 4'd10) : d2_raw;
 
+    // 实测确认：an[0] 在最左；小数点画在所选数字右侧
+    //   左1=digits[3:0]=空白，左2=[7:4]=十位 d2，左3=[11:8]=个位 d1，左4=[15:12]=小数 d0
+    //   小数点放在个位（左3）右侧 -> an[2] -> dp[2]
+    wire [15:0] seg_digits = sw[4] ? 16'h4321 : {d0, d1, d2, 4'hF};
+    wire [3:0]  seg_dp     = sw[4] ? 4'b0001 : 4'b0100;
+
     seg7_scan #(.DIV(100000)) u_seg (
         .clk   (clk_sys),
         .rst_n (rst_sys_n),
-        .digits({4'hF, d2, d1, d0}),
-        .dp    (4'b0010),
+        .digits(seg_digits),
+        .dp    (seg_dp),
         .seg   (seg),
         .an    (an)
     );
