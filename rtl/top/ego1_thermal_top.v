@@ -733,7 +733,10 @@ module ego1_thermal_top (
     // 用 tj_filt 显示会把"端到端延迟 ≤200 ms"直接击穿（docs/01 §2.4 本来也是这么定的）
     wire signed [15:0] disp_val = text_mode ? text_cal : tj_cal;
     wire [15:0] disp_abs = disp_val[15] ? (~disp_val + 16'd1) : disp_val;
-    wire [15:0] t01 = (disp_abs * 16'd5) >> 7;        // 0.1 ℃ 单位
+    // 注意位宽：disp_abs 是 Q8.8，×5 后 51.2 ℃(13107) 就会超过 16 位，
+    // 原来写成 16 位上下文会直接溢出归零（上板实测 >51 ℃ 显示翻回 00.0）。
+    wire [20:0] t01_w = disp_abs * 21'd5;            // 中间量扩到 21 位
+    wire [15:0] t01   = t01_w[19:7];                 // /128 → 0.1 ℃ 单位
 
     // 十进制拆分：/10 ≈ ×205 >> 11，/100 ≈ ×2621 >> 18（避免常数除数位链）
     wire [27:0] d_mul10  = t01 * 11'd205;
@@ -766,7 +769,19 @@ module ego1_thermal_top (
         else            heart <= heart + 24'd1;
     end
 
-    assign led[0]    = alarm;
+    //------------------------------------------------------------------
+    // LED 语义（state 编码：0=NORMAL 1=WARN 2=HOT 3=CRIT）
+    //   led[0]  任意告警（WARN 起亮）
+    //   led[1]  HOT 及以上
+    //   led[2]  CRIT 及以上（只有 state==3 亮）
+    //   led[3]  MMCM 未锁定（正常应灭）
+    //   led[6:4] 当前档位（二进制 000~100）
+    //   led[7]  风扇堵转/断线（无风扇时常亮；虚拟热台模式下应灭）
+    //   led[15:8] 心跳
+    // 仿真证据（.work/tb_sup_led.sv）：NORMAL 000 → WARN 100 → HOT 110 → CRIT 111
+    //   → 降温+clr 回 000；supervisor 的 alarm 只在 CRIT 锁存，仍在遥测 flags bit0。
+    //------------------------------------------------------------------
+    assign led[0]    = (state != 2'd0);   // 任意告警：WARN/HOT/CRIT 都亮
     assign led[1]    = (state >= 2'd2);
     assign led[2]    = (state == 2'd3);
     assign led[3]    = ~locked;

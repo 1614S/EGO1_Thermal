@@ -114,7 +114,7 @@ module cmd_proc (
         reg        neg;
         begin
             neg = q[15];
-            t10 = neg ? (((~q + 16'd1) * 16'd5) >> 7) : ((q * 16'd5) >> 7);
+            t10 = neg ? (((~q + 16'd1) * 21'd5) >> 7) : ((q * 21'd5) >> 7);
             if (neg) putc(8'h2D);
             d2 = div100(t10);
             d1 = div10(t10) - div100(t10) * 16'd10;
@@ -281,10 +281,10 @@ module cmd_proc (
                 // 格式化第 1 拍：Q8.8 → 0.1 ℃ 单位（只做一次乘加）
                 S_FMT: begin
                     t_tjneg <= tj_f[15];
-                    t_tj10  <= tj_f[15] ? (((~tj_f + 16'd1) * 16'd5) >> 7)
-                                        : ((tj_f * 16'd5) >> 7);
-                    t_sp10  <= setpoint[15] ? (((~setpoint + 16'd1) * 16'd5) >> 7)
-                                            : ((setpoint * 16'd5) >> 7);
+                    t_tj10  <= tj_f[15] ? (((~tj_f + 16'd1) * 21'd5) >> 7)
+                                        : ((tj_f * 21'd5) >> 7);
+                    t_sp10  <= setpoint[15] ? (((~setpoint + 16'd1) * 21'd5) >> 7)
+                                            : ((setpoint * 21'd5) >> 7);
                     t_du10  <= {5'd0, duty};
                     st      <= S_FMT2;
                 end
