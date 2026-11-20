@@ -633,8 +633,12 @@ module ego1_thermal_top (
     reg  [2:0]  send_d;
 
     // 命令回复优先占用 UART（人敲命令的频率远低于 10 Hz 遥测）
-    assign tx_start = cmd_busy ? cmd_tx_start : fb_tx_start;
-    assign tx_data  = cmd_busy ? cmd_tx_data  : fb_tx_data;
+    //
+    // 仲裁要用 busy | tx_start：cmd_proc 在同一拍同时把 busy 和 tx_start 置 1，
+    // 只判寄存后的 busy 会漏掉回复的第一个字节（上板实测回复变短/乱码）。
+    wire cmd_sel = cmd_busy | cmd_tx_start;
+    assign tx_start = cmd_sel ? cmd_tx_start : fb_tx_start;
+    assign tx_data  = cmd_sel ? cmd_tx_data  : fb_tx_data;
 
     //------------------------------------------------------------------
     // 命令通道（ASCII，115200）：标定、改 Kp/Ki、清报警、读状态

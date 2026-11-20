@@ -3,7 +3,7 @@
 // cmd_proc.v —— ASCII 命令通道（115200，PuTTY 直接敲）
 //
 // 命令（大小写不敏感，CR 或 LF 结尾）：
-//   ?          状态行：T=45.0 S=50.0 D=204 G=3 ST=0
+//   ?          状态行：T=45.0 S=50.0 D=0204 G=3 ST=0（duty 固定 4 位，满量程 1000）
 //   S=50.0     设目标温度（℃）
 //   KP=200     设 Kp（duty/℃，可带小数）
 //   KI=1.0     设 Ki（duty/(℃·样本)）
@@ -63,6 +63,7 @@ module cmd_proc (
     reg [3:0]  code;
     reg [4:0]  nstart, nk;
     reg        nact;
+    reg        tx_gap;         // 发完一个字节后强制空一拍
 
     reg [15:0] v_int, v_frac;
     reg        v_dot, v_any;
@@ -80,7 +81,7 @@ module cmd_proc (
     // '?' 状态行的格式化结果（分两拍算出来，再在 S_ACT 里只做拼接）
     reg [15:0] t_tj10, t_sp10, t_du10;
     reg        t_tjneg;
-    reg  [3:0] tj_d2, tj_d1, tj_d0, sp_d2, sp_d1, sp_d0, du_d2, du_d1, du_d0;
+    reg  [3:0] tj_d2, tj_d1, tj_d0, sp_d2, sp_d1, sp_d0, du_d3, du_d2, du_d1, du_d0;
 
     //------------------------------------------------------------------
     // 回复构造
@@ -95,14 +96,17 @@ module cmd_proc (
     endtask
 
     // 常数除法在 FPGA 里是"乘高位 + 修正"的长进位链，这里全换乘加近似：
-    //   /10 ≈ ×205 >> 11      /100 ≈ ×2621 >> 18
+    //   /10 ≈ ×205 >> 11      /100 ≈ ×2622 >> 18
+    // 注意：拆位必须向下取整。原来加了半个 LSB 做四舍五入，35.5 ℃ 的 t10=355
+    // 会被 div10 算成 36，d0 = 355 - 360 = -5 → 低 4 位 = 11 = ';'，
+    // 上板实测回复里出现了 "T=35.;"。
     function [15:0] div10(input [15:0] x);
         reg [26:0] m;
-        begin m = x * 11'd205 + 27'd1024; div10 = m[26:11]; end   // 加半个 LSB 做四舍五入
+        begin m = x * 11'd205; div10 = m[26:11]; end
     endfunction
     function [15:0] div100(input [15:0] x);
         reg [33:0] m;
-        begin m = x * 18'd2622 + 34'd131072; div100 = m[33:18]; end
+        begin m = x * 18'd2622; div100 = m[33:18]; end
     endfunction
 
     task put_temp(input signed [15:0] q);
@@ -174,6 +178,7 @@ module cmd_proc (
             tx_start <= 1'b0;
             tx_data  <= 8'd0;
             busy     <= 1'b0;
+            tx_gap   <= 1'b0;
             wr_en    <= 1'b0;
             wr_addr  <= 6'd0;
             wr_data  <= 32'd0;
@@ -299,7 +304,10 @@ module cmd_proc (
                     f_d100 = div100(t_du10); f_d10 = div10(t_du10);
                     f_x1   = f_d10 - f_d100 * 16'd10;
                     f_x0   = t_du10 - f_d10 * 16'd10;
-                    du_d2 <= f_d100[3:0]; du_d1 <= f_x1[3:0]; du_d0 <= f_x0[3:0];
+                    // duty 满量程 1000，需要第 4 位；<1000 时首位为 0
+                    du_d3 <= (t_du10 >= 16'd1000) ? 4'd1 : 4'd0;
+                    du_d2 <= f_d100[3:0] - ((t_du10 >= 16'd1000) ? 4'd10 : 4'd0);
+                    du_d1 <= f_x1[3:0]; du_d0 <= f_x0[3:0];
 
                     st <= S_ACT;
                 end
@@ -316,8 +324,8 @@ module cmd_proc (
                             putc(8'h30 + {4'd0, sp_d2}); putc(8'h30 + {4'd0, sp_d1});
                             putc(8'h2E); putc(8'h30 + {4'd0, sp_d0});
                             putc(8'h20); putc(8'h44); putc(8'h3D);
-                            putc(8'h30 + {4'd0, du_d2}); putc(8'h30 + {4'd0, du_d1});
-                            putc(8'h30 + {4'd0, du_d0});
+                            putc(8'h30 + {4'd0, du_d3}); putc(8'h30 + {4'd0, du_d2});
+                            putc(8'h30 + {4'd0, du_d1}); putc(8'h30 + {4'd0, du_d0});
                             putc(8'h20); putc(8'h47); putc(8'h3D); putc(8'h30 + {5'd0, gear});
                             putc(8'h20); putc(8'h53); putc(8'h54); putc(8'h3D);
                             putc(8'h30 + {6'd0, state});
@@ -381,13 +389,22 @@ module cmd_proc (
                 end
 
                 //================ 发送 ================
+                // 每发一个字节后强制空一拍再发下一个。
+                //   uart_tx 要到 start 的下一拍才拉高 busy；若当拍 !tx_busy 就继续发，
+                //   下一拍的 start 会落在 uart 正在发送上一字节时被忽略，
+                //   回复就变成"隔一个丢一个"（上板实测 OK\r\n 只剩 O\r，30 字节只剩 15）。
+                //   这里只空一拍、不依赖 busy 拉高，因为 tb_cmd 把 tx_busy 恒接 0，
+                //   等 busy 会死锁。
                 S_SEND: begin
                     busy <= 1'b1;
-                    if (!tx_busy) begin
+                    if (tx_gap) begin
+                        tx_gap <= 1'b0;
+                    end else if (!tx_busy) begin
                         if (ridx < rlen) begin
                             tx_data  <= rbuf[ridx];
                             tx_start <= 1'b1;
                             ridx     <= ridx + 6'd1;
+                            tx_gap   <= 1'b1;
                         end else begin
                             busy <= 1'b0;
                             st   <= S_RX;
