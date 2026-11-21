@@ -1,4 +1,4 @@
-<#
+﻿<#
 capture_serial.ps1 —— 读 EGO1 的 32 字节遥测帧 → CSV（不依赖 pyserial）
 
 为什么用 PowerShell 的 SerialPort 类：这台机器上没装 pyserial，
