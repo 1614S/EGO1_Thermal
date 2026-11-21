@@ -236,7 +236,7 @@ module ego1_thermal_top (
 
     reg  [1:0]  sp_idx;
     reg  [3:0]  btn_d;
-    wire [3:0]  btn_pressed = ~btn[3:0];          // EGO1 按键按下为低
+    wire [3:0]  btn_pressed = ~btn[3:0];          // EGO1 按键按下为低（S0~S3）
     wire [3:0]  btn_pulse   = btn_pressed & ~btn_d;
 
     always @(posedge clk_sys or negedge rst_sys_n) begin
@@ -508,11 +508,21 @@ module ego1_thermal_top (
     //------------------------------------------------------------------
     reg signed [15:0] setpoint_ext;
     reg        [1:0]  se_idx;
+
+    // S4（btn[4]）独立边沿检测：原有 btn_pressed/btn_pulse 只有 4 位（S0~S3），
+    // 直接引用 btn_pulse[4] 是越界的（上板表现：按 S4 没反应）。
+    reg s4_d;
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n) s4_d <= 1'b1;            // 按键低有效，空闲为高
+        else            s4_d <= btn[4];
+    end
+    wire s4_press = s4_d & ~btn[4];              // 高→低 = 按下
+
     always @(posedge clk_sys or negedge rst_sys_n) begin
         if (!rst_sys_n) begin
             setpoint_ext <= 16'sd10240;                          // 40.0 ℃
             se_idx       <= 2'd0;
-        end else if (btn_pulse[4]) begin                         // S4：40 → 50 → 60 → 40
+        end else if (s4_press) begin                             // S4：40 → 50 → 60 → 40
             se_idx       <= (se_idx == 2'd2) ? 2'd0 : se_idx + 2'd1;
             setpoint_ext <= (se_idx == 2'd0) ? `T_50_Q8_8 :
                             (se_idx == 2'd1) ? `T_60_Q8_8 : `T_40_Q8_8;
