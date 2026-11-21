@@ -280,9 +280,9 @@ def plot_curve(path, t_all, y_all, t_fit, y_fit, fit, meta, tau_ci=None):
     pad = max((y_hi - y_lo) * 0.18, 0.3)
     ax.set_ylim(y_lo - pad * 0.5, y_hi + pad)
     ax.set_xlim(t_all[0] - 2, t_all[-1] + 2)
-    ax.text(0.012, 0.03,
+    ax.text(0.988, 0.03,
             f"$T_{{amb}}$ = {meta['tamb']:.2f} $^\\circ$C  (sensor initial value)",
-            transform=ax.transAxes, fontsize=8, color="#555555")
+            transform=ax.transAxes, fontsize=8, color="#555555", ha="right")
 
     ax.set_xlabel("time t (s)")
     ax.set_ylabel("temperature ($^\\circ$C)")
@@ -527,9 +527,15 @@ def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
         theta_ref = "起点稳态 T0（扰动前）"
         theta_t = t0
     elif mode == "step":
-        dev = np.abs(y_all - y_all[0])
-        hit = dev > max(2.0 * noise, 0.05)
+        # 起点取"明显偏离起始稳态"的位置：阈值 = max(5 sigma, 总变化的 10%)
+        #   （原来用 2 sigma / 0.05 K，噪声就能触发，会把阶跃前的平段也算进去）
+        pre = float(np.median(y_all[:max(3, min(n0, n // 4))]))
+        total_chg = float(y_all[-1] - pre)
+        thr_step = max(5.0 * noise, 0.10 * abs(total_chg))
+        hit = np.abs(y_all - pre) > thr_step
         seg_start = int(np.argmax(hit)) if np.any(hit) else 0
+        print(f"[step] 起始稳态 {pre:.2f} C，变化 {total_chg:+.2f} K，"
+              f"阈值 {thr_step:.2f} K，拟合从 t={t_all[seg_start]:.1f} s 开始")
         if (n - seg_start) < 50:
             problems.append(f"阶跃后只有 {n - seg_start} 帧（<50），不足以拟合 τ")
         theta_ref = "末值稳态（阶跃终值，与 analyze_thermal 口径一致）"
