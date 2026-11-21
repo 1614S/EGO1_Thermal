@@ -22,7 +22,6 @@ module ego1_thermal_top (
     input  wire        uart_rx,
     output wire        fan_pwm,
     output wire        heat_pwm,       // 环境加热电阻 PWM（B18 / J5-7）
-    input  wire        fan_tach,
     inout  wire        dht_dq
 );
 
@@ -588,10 +587,6 @@ module ego1_thermal_top (
     //   联调时哪一段出问题一望即知。
     //------------------------------------------------------------------
     wire [15:0] vp_rpm;
-    wire        fan_fail;
-    wire [15:0] fan_rpm, fan_fail_cnt;
-    // 虚拟热台模式下用虚拟风扇的 tach，真实模式下用板上 tach（assign 放后面，声明顺序）
-    wire        fan_tach_eff;
     wire        vp_tach, vp_stalled;
     wire [15:0] vp_inv_r2;
     wire [7:0]  vp_flow;
@@ -615,19 +610,6 @@ module ego1_thermal_top (
         .inv_r2_q12   (vp_inv_r2),
         .flow_q8      (vp_flow),
         .stalled      (vp_stalled)
-    );
-
-    assign fan_tach_eff = sw[6] ? vp_tach : fan_tach;
-
-    fan_tach u_ftach (
-        .clk      (clk_sys),
-        .rst_n    (rst_sys_n),
-        .tick_ms  (tick_ms),
-        .tach     (fan_tach_eff),
-        .duty     (duty_fan),
-        .rpm      (fan_rpm),
-        .fan_fail (fan_fail),
-        .fail_cnt (fan_fail_cnt)
     );
 
     power_model u_vpwr (
@@ -741,8 +723,6 @@ module ego1_thermal_top (
         .cal_b    (cal_b),
         .ext_err_cnt (ext_err_cnt),
         .ext_crc_cnt (ext_crc_cnt),
-        .fan_rpm     (fan_rpm),
-        .fan_fail_cnt(fan_fail_cnt),
         .n_cmd    (cmd_n_cmd),
         .n_err    (cmd_n_err),
         .n_cal    (cmd_n_cal)
@@ -775,7 +755,7 @@ module ego1_thermal_top (
         .f_in     (f_meas),
         .p_in     (p_est),
         .age_in   (ext_age[7:0]),
-        .flags_in ({5'd0, fan_fail, drp_err, alarm}),
+        .flags_in ({6'd0, drp_err, alarm}),          // bit2(堵转) 已随 TACH 删除，恒 0
         .tx_start (fb_tx_start),
         .tx_data  (fb_tx_data),
         .tx_busy  (tx_busy | cmd_busy),
@@ -932,7 +912,7 @@ module ego1_thermal_top (
     assign led[2]    = (state == 2'd3);
     assign led[3]    = ~locked;
     assign led[6:4]  = gear;              // 档位（3 bit）；led[7] 单独给风扇故障
-    assign led[7]    = fan_fail;          // 风扇堵转/断线指示
+    assign led[7]    = ext_sat;           // 加热输出饱和指示（原 TACH 堵转灯已删）
     assign led[15:8] = heart[23:16];
 
 endmodule

@@ -49,8 +49,6 @@ module cmd_proc (
     input  wire signed [15:0] cal_b,
     input  wire        [15:0] ext_err_cnt,      // AM2302 总错误数
     input  wire        [15:0] ext_crc_cnt,      // AM2302 校验错数
-    input  wire        [15:0] fan_rpm,          // 风扇实测转速（TACH 1 s 闸门）
-    input  wire        [15:0] fan_fail_cnt,     // 堵转累计次数
     output reg         [15:0] n_cmd,
     output reg         [15:0] n_err,
     output reg         [15:0] n_cal
@@ -374,8 +372,6 @@ module cmd_proc (
                             putc(8'h20); putc(8'h45); putc(8'h3D); put_hex4(ext_err_cnt);
                             putc(8'h20); putc(8'h43); putc(8'h3D); put_hex4(ext_crc_cnt);
                             // 风扇诊断：N=实测转速(hex, rpm)，F=堵转累计次数
-                            putc(8'h20); putc(8'h4E); putc(8'h3D); put_hex4(fan_rpm);
-                            putc(8'h20); putc(8'h46); putc(8'h3D); put_hex4(fan_fail_cnt);
                             putc(8'h0D); putc(8'h0A);
                         end
                         C_R: begin

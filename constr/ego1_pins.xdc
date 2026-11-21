@@ -91,7 +91,6 @@ set_property -dict {PACKAGE_PIN T4 IOSTANDARD LVCMOS33} [get_ports uart_tx]
 #   exp_io3 -> heat_pwm（环境加热电阻 PWM，低边 N-MOS 栅极，需 100R 串阻 + 10k 下拉）
 #-----------------------------------------------------------------------
 set_property -dict {PACKAGE_PIN B16 IOSTANDARD LVCMOS33} [get_ports fan_pwm]
-set_property -dict {PACKAGE_PIN A15 IOSTANDARD LVCMOS33 PULLTYPE PULLUP} [get_ports fan_tach]
 set_property -dict {PACKAGE_PIN A13 IOSTANDARD LVCMOS33 PULLTYPE PULLUP} [get_ports dht_dq]
 set_property -dict {PACKAGE_PIN B18 IOSTANDARD LVCMOS33} [get_ports heat_pwm]
 

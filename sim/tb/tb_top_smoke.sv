@@ -38,7 +38,7 @@ module tb_top_smoke;
         .uart_tx (uart_tx),
         .uart_rx (1'b1),
         .fan_pwm (fan_pwm),
-        .fan_tach(1'b1),
+       
         .dht_dq  (dht_dq)
     );
 

@@ -29,7 +29,7 @@ module tb_vplant_sys;
     ego1_thermal_top u_dut (
         .clk(clk), .rst_btn(rst_btn), .btn(btn), .sw(sw),
         .led(led), .seg(seg), .an(an), .uart_tx(uart_tx), .uart_rx(1'b1),
-        .fan_pwm(fan_pwm), .fan_tach(1'b1), .dht_dq(dht_dq)
+        .fan_pwm(fan_pwm), .dht_dq(dht_dq)
     );
 
     integer t_s;
