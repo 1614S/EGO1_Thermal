@@ -676,6 +676,7 @@ module ego1_thermal_top (
         .gear     (gear),
         .state    (state),
         .tj_raw   (tj_s),
+        .text_f   (text_filt),
         .cal_a    (cal_a),
         .cal_b    (cal_b),
         .ext_err_cnt (ext_err_cnt),
