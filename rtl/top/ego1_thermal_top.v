@@ -729,11 +729,41 @@ module ego1_thermal_top (
     // 显示
     //   btn[3]（板上 V1）按一下翻一页：0=结温 Tj、1=设定值、2=PWM 占空比、3=外部温度
     //   sw[4]=1 仍显示自检图案 "1.234"
+    //
+    //   翻页键做 20 ms 去抖 + "必须先见到松开状态才允许翻页"：
+    //   上电/重载比特流时 V1 若因按键电容或悬空被读成低电平，
+    //   旧写法会当成一次按键把页翻走，默认页就不是结温了（上板遇到过）。
     //------------------------------------------------------------------
+    reg [2:0]  pg_sync;
+    reg        pg_stable, pg_prev, pg_armed;
+    reg [20:0] pg_cnt;                                       // 21 位：20 ms @100 MHz = 2 000 000
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n) begin
+            pg_sync   <= 3'b000;                             // 初值按"低"算，
+            pg_stable <= 1'b0;                               // 必须先看到松开（高）
+            pg_prev   <= 1'b0;                               // 才 pg_armed=1
+            pg_armed  <= 1'b0;
+            pg_cnt    <= 21'd0;
+        end else begin
+            pg_sync <= {pg_sync[1:0], btn[3]};
+            if (pg_sync[2] == pg_stable) begin
+                pg_cnt <= 21'd0;
+            end else if (pg_cnt >= 21'd2_000_000) begin      // 20 ms @100 MHz
+                pg_stable <= pg_sync[2];
+                pg_cnt    <= 21'd0;
+            end else begin
+                pg_cnt <= pg_cnt + 21'd1;
+            end
+            pg_prev <= pg_stable;
+            if (pg_stable) pg_armed <= 1'b1;                 // 松开过一次才允许翻页
+        end
+    end
+    wire pg_press = pg_armed & pg_prev & ~pg_stable;         // 按下沿
+
     reg [1:0] disp_page;
     always @(posedge clk_sys or negedge rst_sys_n) begin
-        if (!rst_sys_n)                 disp_page <= 2'd0;
-        else if (btn_pulse[3])          disp_page <= disp_page + 2'd1;
+        if (!rst_sys_n)                 disp_page <= 2'd0;   // 默认 = 结温页
+        else if (pg_press)              disp_page <= disp_page + 2'd1;
     end
 
     // 显示必须用"标定后的原始值"而不是重滤波值：MA8 的窗口是 8×100 ms = 800 ms，
