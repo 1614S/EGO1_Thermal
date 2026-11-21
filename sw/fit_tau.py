@@ -188,6 +188,47 @@ def t63_crossing(t, y, fit):
     return float("nan")
 
 
+def detect_mode(y, noise):
+    """自动判别数据形状，决定拟合哪一段。
+
+    * "disturbance" —— 外部扰动：中间有明显峰值，两侧都低于峰值 → 只拟合峰后段
+    * "step"        —— 设定值阶跃：从一端单调走到另一端 → 拟合整段
+    * "unknown"     —— 两者都不像，交给上层拒绝
+    """
+    n = len(y)
+    if n < 60:
+        return "unknown", dict(reason=f"只有 {n} 帧，太短")
+    y0, y1 = float(y[0]), float(y[-1])
+    imax = int(np.argmax(y))
+    span = float(y.max() - y.min())
+    thr = max(0.5, 5.0 * noise)
+
+    # A. 中间有峰 → 扰动实验
+    if (0.08 * n) < imax < (0.92 * n) and (y[imax] - max(y0, y1)) > thr:
+        return "disturbance", dict(peak_idx=imax, peak=float(y[imax]), span=span)
+
+    # B. 单调阶跃（升或降）
+    #    用**分块中位数**判趋势：慢衰减 + 噪声时逐点差分符号随机，
+    #    但每块的温度中位数会稳稳地朝一个方向走（踩过：逐点判法把阶跃误判成 unknown）
+    total = y1 - y0
+    k_blocks = int(max(4, min(12, n // 20)))
+    edges = np.linspace(0, n, k_blocks + 1).astype(int)
+    med = np.array([np.median(y[edges[i]:max(edges[i] + 1, edges[i + 1])])
+                    for i in range(k_blocks)])
+    dd = np.diff(med)
+    bad = int(np.sum((np.sign(dd) != np.sign(total)) & (np.abs(dd) > 0.05)))
+    mono = 1.0 - bad / max(1, len(dd))
+    if abs(total) > thr:
+        if mono >= 0.85 and span >= 0.8 * abs(total):
+            return "step", dict(peak_idx=(0 if total < 0 else n - 1),
+                                peak=float(y[0] if total < 0 else y[-1]),
+                                span=span, monotonic=mono, delta=float(total))
+
+
+    return "unknown", dict(reason=f"既不像中间有峰的扰动，也不像单调阶跃"
+                                  f"（首尾差 {total:.2f} K，分块单调占比 {mono*100:.0f} %）")
+
+
 def rise_ratio(y_peak, tamb, y0):
     """这次扰动把温度抬了多少（相对起点）。"""
     return y_peak - y0
@@ -211,8 +252,9 @@ def plot_curve(path, t_all, y_all, t_fit, y_fit, fit, meta, tau_ci=None):
 
     # 峰值标记（标注放右侧，避开标题）
     ip = meta["ip"]
+    _lbl = "start" if meta.get("mode") == "step" else "peak"
     ax.plot([t_all[ip]], [y_all[ip]], "o", ms=5, color="#c00000", zorder=5)
-    ax.annotate(f"peak {y_all[ip]:.2f} $^\\circ$C @ {t_all[ip]:.1f} s",
+    ax.annotate(f"{_lbl} {y_all[ip]:.2f} $^\\circ$C @ {t_all[ip]:.1f} s",
                 xy=(t_all[ip], y_all[ip]),
                 xytext=(t_all[ip] + 0.10 * (t_all[-1] - t_all[0]), y_all[ip] + 0.10),
                 fontsize=8, color="#c00000",
@@ -222,8 +264,10 @@ def plot_curve(path, t_all, y_all, t_fit, y_fit, fit, meta, tau_ci=None):
     tp = meta["t_peak"]
     t1 = tp + fit["tau"]
     ax.axvline(t1, ls="-.", lw=0.9, color="#2e7d32", alpha=0.9)
-    ax.annotate(f"$t_0+\\tau$ = {t1 - t_all[0]:.1f} s", xy=(t1, ax.get_ylim()[0]),
-                xytext=(3, 5), textcoords="offset points", va="bottom", ha="left",
+    _ylo, _yhi = ax.get_ylim()
+    ax.annotate(f"$t_0+\\tau$ = {t1 - t_all[0]:.1f} s",
+                xy=(t1, _ylo + 0.12 * (_yhi - _ylo)),
+                xytext=(3, 0), textcoords="offset points", va="bottom", ha="left",
                 fontsize=8, color="#2e7d32")
 
     if tau_ci:
@@ -264,6 +308,9 @@ def write_report(path, meta, theta, u_rel, u_terms, tau_ci, fit, t63):
     A(f"- 生成时间：{meta['when']}")
     A(f"- 数据文件：`{meta['csv_name']}`（{meta['n']} 帧，{meta['t_span']:.1f} s）")
     A(f"- 通道：`{meta['channel']}` → 列 `{meta['channel_col']}`")
+    _mode_cn = {"disturbance": "外部扰动（拟合峰后段）",
+                "step": "设定值阶跃（拟合整段）"}.get(meta.get("mode"), "未判别")
+    A(f"- 数据形状：**{_mode_cn}**")
     A(f"- 复现命令：")
     A("")
     A("```bash")
@@ -278,7 +325,10 @@ def write_report(path, meta, theta, u_rel, u_terms, tau_ci, fit, t63):
     A(f"| 环境温度 Tamb | **{meta['tamb']:.2f} ℃** | {meta['tamb_src']} |")
     A(f"| 自热功耗 P | **{meta['p_mw']:.0f} mW** | {meta['p_src']} |")
     A(f"| **热阻 θ** | **{theta:.2f} ± {2*u_rel*theta:.2f} ℃/W** | k=2（≈95%），相对 {u_rel*100:.1f} % |")
-    A(f"| 峰值 | {meta['peak']:.2f} ℃ @ {meta['t_peak']:.1f} s | 相对起点 +{meta['peak']-meta['t0']:.2f} K |")
+    if meta.get("mode") == "step":
+        A(f"| 阶跃 | {meta['t_peak']:.1f} s 处开始，变化 {meta['peak']-meta['t0']:+.2f} K | 整段拟合（阶跃响应） |")
+    else:
+        A(f"| 峰值 | {meta['peak']:.2f} ℃ @ {meta['t_peak']:.1f} s | 相对起点 +{meta['peak']-meta['t0']:.2f} K |")
     A(f"| **时间常数 τ（拟合）** | **{fit['tau']:.2f} s** | R² = {fit['r2']:.4f} |")
     if tau_ci:
         A(f"| τ 的 95% 置信区间 | **[{tau_ci['lo']:.2f}, {tau_ci['hi']:.2f}] s** | 残差自助法，{tau_ci['n']} 次重采样 |")
@@ -364,19 +414,37 @@ def synth_csv(path, tau_true, theta_true, p_mw, tamb, t_off, dur, dt=0.1,
     return path
 
 
+def synth_step_csv(path, tau_true, y_start, y_end, dur, dt=0.1, noise=0.02,
+                   seed=11, tamb=23.0):
+    """生成"设定值阶跃"形状的 CSV：y = y_end + (y_start-y_end)*exp(-t/tau)。"""
+    rng = np.random.default_rng(seed)
+    t = np.arange(0.0, dur, dt)
+    y = y_end + (y_start - y_end) * np.exp(-t / tau_true) + rng.normal(0.0, noise, len(t))
+    cols = ["t_s", "tj_c", "text_c", "rh_pct", "tset_c", "duty", "gear", "state",
+            "f_mhz", "p_mw", "age", "flags", "seq", "tset_ext_c", "duty_heat"]
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for i, ti in enumerate(t):
+            w.writerow([f"{ti:.3f}", f"{y[i]:.4f}", f"{tamb:.4f}", "50.0", "33.00",
+                        "500", "3", "0", "100.0", "750", "0", "0", str(i),
+                        "40.00", "500"])
+    return path
+
+
 def run_selftest():
-    """合成两组已知参数的数据，验证 tj / text 两条通道都能复原 τ 与 θ。"""
+    """合成已知参数的数据，验证：扰动（tj/text）与阶跃三种情形都能复原 τ。"""
     import tempfile
 
     cases = [
-        # (通道, tau真值, theta真值, P_mW, Tamb, 扰动结束时刻, 总时长)
-        ("tj",   21.91, 20.0, 750, 22.99, 50.0, 140),
-        ("text", 45.00, 30.0, 750, 23.00, 70.0, 320),
+        # (名字, 通道, tau真值, theta真值, P_mW, Tamb, 扰动结束时刻, 总时长)
+        ("disturb-tj",   "tj",   21.91, 20.0, 750, 22.99, 50.0, 140),
+        ("disturb-text", "text", 45.00, 30.0, 750, 23.00, 70.0, 320),
     ]
     ok = True
     print("=== fit_tau.py 自检（合成数据，已知真值）===")
     with tempfile.TemporaryDirectory() as td:
-        for ch, tau_t, th_t, p_mw, tamb, t_off, dur in cases:
+        for name, ch, tau_t, th_t, p_mw, tamb, t_off, dur in cases:
             p = Path(td) / f"synth_{ch}.csv"
             synth_csv(p, tau_t, th_t, p_mw, tamb, t_off, dur, column=ch)
             try:
@@ -391,10 +459,28 @@ def run_selftest():
             e_th = abs(res["theta_C_per_W"] - th_t) / th_t * 100
             good = e_tau <= 10 and e_th <= 15
             ok = ok and good
-            print(f"[{'PASS' if good else 'FAIL'}] 通道 {ch:4s}: "
+            print(f"[{'PASS' if good else 'FAIL'}] {name:12s} (通道 {ch:4s}): "
                   f"tau {res['tau_s']:.2f} s (真值 {tau_t:.2f}, 误差 {e_tau:.1f} %)  "
                   f"theta {res['theta_C_per_W']:.2f} C/W (真值 {th_t:.2f}, 误差 {e_th:.1f} %)  "
-                  f"R^2={res['tau_r2']:.4f}")
+                  f"R^2={res['tau_r2']:.4f} mode={res['mode']}")
+
+        # --- 阶跃用例：只要能识别出 step 并复原 tau 即可（θ 在阶跃下无物理意义）---
+        tau_s = 60.0
+        p_step = Path(td) / "synth_step.csv"
+        synth_step_csv(p_step, tau_s, 36.3, 33.3, 240)
+        try:
+            res = estimate(p_step, "tj", p_mw_override=750, tamb_override=30.8,
+                           u_p=0.25, u_temp=0.5, t0_win=10.0, n_boot=120,
+                           quiet=True, out_dir=Path(td) / "out_step")
+            e_t = abs(res["tau_s"] - tau_s) / tau_s * 100
+            good = (res["mode"] == "step") and e_t <= 10
+            ok = ok and good
+            print(f"[{'PASS' if good else 'FAIL'}] {'step':12s} (通道 tj  ): "
+                  f"tau {res['tau_s']:.2f} s (真值 {tau_s:.2f}, 误差 {e_t:.1f} %)  "
+                  f"mode={res['mode']}  R^2={res['tau_r2']:.4f}")
+        except SystemExit as e:
+            print(f"[FAIL] step: 被拒绝（{e}）")
+            ok = False
     print("=== 自检" + ("通过" if ok else "失败") + " ===")
     return 0 if ok else 1
 
@@ -425,37 +511,54 @@ def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
     p_w = p_mw / 1000.0
     theta = (t0 - tamb) / p_w
 
-    ip = int(np.argmax(y_all))
-    rise = float(y_all[ip]) - t0
     n = len(y_all)
+    mode, minfo = detect_mode(y_all, noise)
 
     # ------------------------------------------------------------------
-    # 数据有效性检查：不合格就明确拒绝，不产出"看起来专业但其实无意义"的报告
+    # 按数据形状选段（这一步保证"阶跃数据不会被误拒"）
+    #   扰动数据 → 峰后段（升温段不符合一阶模型）
+    #   阶跃数据 → 整段（一阶系统对阶跃的整个响应就是一条指数）
     # ------------------------------------------------------------------
     problems = []
-    if ip < max(3, int(0.05 * n)):
-        problems.append(f"峰值出现在第 {ip} 帧（占比 {ip/n*100:.1f} %），"
-                        f"说明信号一开始就在最高点——扰动可能没发生或数据太短")
-    if (n - ip) < 50:
-        problems.append(f"峰后只有 {n - ip} 帧（<50），不足以拟合 τ")
-    if rise < max(0.3, 5.0 * noise):
-        problems.append(f"峰值仅比起点高 {rise:.2f} K（噪声 σ={noise:.3f} K），扰动幅度不足")
-    if abs(t0 - tamb) < 0.2:
-        problems.append(f"起点稳态 T0={t0:.2f} ℃ 与环境温度 Tamb={tamb:.2f} ℃ 几乎相等，"
-                        f"θ=(T0−Tamb)/P 无意义")
+    if mode == "disturbance":
+        seg_start = int(minfo["peak_idx"])
+        if (n - seg_start) < 50:
+            problems.append(f"峰后只有 {n - seg_start} 帧（<50），不足以拟合 τ")
+        theta_ref = "起点稳态 T0（扰动前）"
+        theta_t = t0
+    elif mode == "step":
+        dev = np.abs(y_all - y_all[0])
+        hit = dev > max(2.0 * noise, 0.05)
+        seg_start = int(np.argmax(hit)) if np.any(hit) else 0
+        if (n - seg_start) < 50:
+            problems.append(f"阶跃后只有 {n - seg_start} 帧（<50），不足以拟合 τ")
+        theta_ref = "末值稳态（阶跃终值，与 analyze_thermal 口径一致）"
+        theta_t = float(np.mean(y_all[-max(10, n // 20):]))
+    else:
+        problems.append("数据形状无法判别：" + str(minfo.get("reason", "")))
+        seg_start = 0
+        theta_ref = "—"
+        theta_t = t0
+
+    if mode != "unknown":
+        theta = (theta_t - tamb) / p_w
+        if abs(theta_t - tamb) < 0.2:
+            problems.append(f"稳态 {theta_t:.2f} ℃ 与环境温度 {tamb:.2f} ℃ 几乎相等，θ 无意义")
+
     if problems:
-        print(f"[拒绝] {csv_path.name}（{channel} 通道）不适合做 τ/θ 估计：")
+        print(f"[拒绝] {csv_path.name}（{channel} 通道）：")
         for q in problems:
             print(f"  - {q}")
         print("")
         print("提示：")
-        print("  * 结温通道：需要一次明显的外部加热/散热扰动（升温 ≥1 K 后自然回落）")
-        print("  * 传感器通道：需要把 AM2302 单独加热（例如用加热电阻）后再自然冷却")
-        print("  * 数据太短：至少覆盖 3~5 个 τ（τ 约 20~100 s，建议采 2~5 分钟）")
+        print("  * 外部扰动：升温 ≥1 K 后自然回落，采到回落稳定（2~5 分钟）")
+        print("  * 设定值阶跃：改 S= 后一直采到稳定（≥3~5 个 τ）")
+        print("  * 传感器通道：需要把 AM2302 单独加热后再自然冷却")
         raise SystemExit(2)
 
-    t2 = t_all[ip:] - t_all[ip]
-    y2 = y_all[ip:]
+    t2 = t_all[seg_start:] - t_all[seg_start]
+    y2 = y_all[seg_start:]
+    ip = seg_start          # 绘图/报告用：扰动=峰值位置，阶跃=分析起点
 
     fit = fit_tau(t2, y2)
     tau_ci = bootstrap_tau(t2, y2, fit, n_boot=n_boot) if n_boot > 0 else None
@@ -463,7 +566,7 @@ def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
 
     # 不确定度
     u_dt = math.sqrt(2.0) * u_temp
-    u_dt_rel = u_dt / abs(t0 - tamb) if abs(t0 - tamb) > 1e-9 else float("inf")
+    u_dt_rel = u_dt / abs(theta_t - tamb) if abs(theta_t - tamb) > 1e-9 else float("inf")
     u_rel = math.sqrt(u_p ** 2 + u_dt_rel ** 2)
     u_terms = dict(u_p_rel=u_p, u_dt=u_dt, u_dt_rel=u_dt_rel, u_temp=u_temp, noise=noise)
 
@@ -473,12 +576,13 @@ def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
     shutil.copy2(csv_path, od / csv_path.name)
 
     meta_png = dict(channel=channel, channel_col=channel_col, tamb=tamb,
-                    A=fit["A"], ip=ip, t_peak=float(t_all[ip]), csv_name=csv_path.name)
+                    A=fit["A"], ip=ip, t_peak=float(t_all[ip]), csv_name=csv_path.name,
+                    mode=mode)
     plot_curve(od / "curve.png", t_all, y_all, t2 + t_all[ip], fit["pred"], fit,
                meta_png, tau_ci)
 
     res = dict(
-        csv=str(csv_path), channel=channel, column=channel_col,
+        csv=str(csv_path), channel=channel, column=channel_col, mode=mode,
         n=int(n), duration_s=float(t_all[-1] - t_all[0]),
         T0=t0, Tamb=tamb, Tamb_source=tamb_src, P_mW=p_mw, P_source=p_src,
         theta_C_per_W=theta, u_rel=u_rel, U95_C_per_W=2 * u_rel * theta,
@@ -498,7 +602,7 @@ def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
         n=n, t_span=float(t_all[-1] - t_all[0]),
         t0=t0, t0_win=t0_win, tamb=tamb, tamb_src=tamb_src,
         p_mw=p_mw, p_src=p_src, peak=float(y_all[ip]), t_peak=float(t_all[ip]),
-        A=fit["A"], files=["report.md", "curve.png", "fit.json", csv_path.name],
+        A=fit["A"], mode=mode, files=["report.md", "curve.png", "fit.json", csv_path.name],
         cmd=f"python sw/fit_tau.py --csv {csv_path} --channel {channel} "
             f"--p-mw {p_mw:.0f} --tamb {tamb:.2f}",
     )
@@ -510,7 +614,12 @@ def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
         print(f"环境温度  : Tamb = {tamb:.2f} C（{tamb_src}）")
         print(f"自热功耗  : P = {p_mw:.0f} mW（{p_src}）")
         print(f"热阻      : theta = {theta:.2f} +- {2*u_rel*theta:.2f} C/W (k=2, rel {u_rel*100:.1f} %)")
-        print(f"峰值      : {meta['peak']:.2f} C @ {meta['t_peak']:.1f} s")
+        if mode == "step":
+            print("            注意：阶跃模式下 θ 仅供参考——若阶跃改变的是风扇转速/档位，")
+            print("                  θ_eff 本身已变化，此时 θ 不代表器件热阻")
+        print(f"数据形状  : {mode}（'disturbance'=扰动拟合峰后段 / 'step'=阶跃拟合整段）")
+        print(f"{'峰值' if mode == 'disturbance' else '阶跃起点'}"
+              f"      : {meta['peak']:.2f} C @ {meta['t_peak']:.1f} s")
         print(f"时间常数  : tau = {fit['tau']:.2f} s  R^2 = {fit['r2']:.4f}")
         if tau_ci:
             print(f"tau 95%CI : [{tau_ci['lo']:.2f}, {tau_ci['hi']:.2f}] s"
