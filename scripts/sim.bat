@@ -13,7 +13,7 @@ if "%TB%"=="" set TB=tb_top_smoke
 if not exist "%ROOT%\work" mkdir "%ROOT%\work"
 cd /d "%ROOT%\work"
 
-call "%VIVADO_BIN%\xvlog.bat" -sv -d SIM_MODEL -i "%ROOT%\rtl\pkg" -i "%ROOT%\sim\tb" -f "%ROOT%\sim\filelist.f"
+call "%VIVADO_BIN%\xvlog.bat" -sv -d SIM_MODEL -i "%ROOT%\rtl\pkg" -i "%ROOT%\rtl\vplant" -i "%ROOT%\sim\tb" -f "%ROOT%\sim\filelist.f"
 if errorlevel 1 goto err
 
 call "%VIVADO_BIN%\xelab.bat" %TB% -s %TB%_sim -timescale 1ns/1ps
