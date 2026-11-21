@@ -441,6 +441,21 @@ def main():
     print("  tau    = %.2f s  (95%% approx [%.2f, %.2f])" % (r["tau"], r["tau_lo"], r["tau_hi"]))
     print("  R^2    = %.4f   n = %d" % (r["r2"], r["n"]))
 
+    # ---- 数据适用性自检 ----------------------------------------------
+    # 本脚本用**整段**数据拟合 T = A + B*exp(-t/tau)，这只在"设定值阶跃"时成立
+    # （一阶系统对阶跃的整个响应就是一条指数）。
+    # 若是"外部加热后再自然冷却"（扰动实验），整段拟合会把升温段也算进去，
+    # tau 被明显低估、R^2 掉到 0.5 左右 —— 应改用 fit_tau.py（只拟合峰后段）。
+    # 这里主动检测并提示，避免把错误的 tau 写进报告。
+    if r["r2"] < 0.90:
+        imax = max(range(len(y)), key=lambda i: y[i])
+        frac = imax / float(len(y))
+        print("")
+        print("  [警告] 整段拟合 R^2 = %.3f 偏低，这份数据可能不是设定值阶跃响应。" % r["r2"])
+        print("         峰值位于数据 %.0f%% 处；若是'外部加热后自然冷却'的扰动实验，" % (frac * 100))
+        print("         请改用:  python sw/fit_tau.py --csv <同一个CSV>  （只拟合峰后段）")
+        print("         本脚本适用于: 设定值阶跃（overshoot/settle/ess + 整段 tau）")
+
     if tset is not None:
         m = step_metrics(t, y, tset)
         print("\n== step ==")
@@ -451,7 +466,8 @@ def main():
     if args.tamb is not None and args.p_mw:
         th = theta_with_uncertainty(y[-1], args.tamb, args.p_mw / 1000.0)
         print("\n== theta ==")
-        print("  dT     = %.2f degC, P = %.3f W" % (th["dt"], th["p_w"]))
+        print("  dT     = %.2f degC, P = %.3f W   (稳态取序列末值：仅适用阶跃/稳态数据)"
+              % (th["dt"], th["p_w"]))
         print("  theta  = %.2f +/- %.2f degC/W  (k=1, rel %.1f %%)" %
               (th["theta"], th["u_theta"], th["rel"] * 100))
 
