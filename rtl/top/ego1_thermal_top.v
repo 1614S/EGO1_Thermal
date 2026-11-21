@@ -103,7 +103,7 @@ module ego1_thermal_top (
 `ifdef SIM_MODEL
     localparam integer EXT_PERIOD_US = 1000;       // 仿真 1 ms（事务本身 5.5 ms，忙时自动跳过）
 `else
-    localparam integer EXT_PERIOD_US = 2_000_000;  // 硬件 2 s（器件要求）
+    localparam integer EXT_PERIOD_US = 2_500_000;  // 硬件 2.5 s（器件要求 ≥2 s，留 25% 余量）
 `endif
 
     am2301_ctrl #(
