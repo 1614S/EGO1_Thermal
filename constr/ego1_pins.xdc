@@ -57,6 +57,7 @@ set_property -dict {PACKAGE_PIN K3 IOSTANDARD LVCMOS33} [get_ports {led[15]}]
 #-----------------------------------------------------------------------
 # 数码管 0 组：段选 seg_data_0[7:0] = B4 A4 A3 B1 A1 B3 B2 D5
 #             位选 seg_cs[3:0]     = G2 C2 C1 H1
+# 另一组位选 seg_cs[7:4] = G1 F1 E1 G6：设计里恒灭（极性高有效 -> 输出 0）
 #-----------------------------------------------------------------------
 set_property -dict {PACKAGE_PIN B4 IOSTANDARD LVCMOS33} [get_ports {seg[0]}]
 set_property -dict {PACKAGE_PIN A4 IOSTANDARD LVCMOS33} [get_ports {seg[1]}]
@@ -71,6 +72,10 @@ set_property -dict {PACKAGE_PIN G2 IOSTANDARD LVCMOS33} [get_ports {an[0]}]
 set_property -dict {PACKAGE_PIN C2 IOSTANDARD LVCMOS33} [get_ports {an[1]}]
 set_property -dict {PACKAGE_PIN C1 IOSTANDARD LVCMOS33} [get_ports {an[2]}]
 set_property -dict {PACKAGE_PIN H1 IOSTANDARD LVCMOS33} [get_ports {an[3]}]
+set_property -dict {PACKAGE_PIN G1 IOSTANDARD LVCMOS33} [get_ports {an[4]}]
+set_property -dict {PACKAGE_PIN F1 IOSTANDARD LVCMOS33} [get_ports {an[5]}]
+set_property -dict {PACKAGE_PIN E1 IOSTANDARD LVCMOS33} [get_ports {an[6]}]
+set_property -dict {PACKAGE_PIN G6 IOSTANDARD LVCMOS33} [get_ports {an[7]}]
 
 #-----------------------------------------------------------------------
 # 串口：PC_Uart_rxd = N5（FPGA 输入），PC_Uart_txd = T4（FPGA 输出）
@@ -82,7 +87,7 @@ set_property -dict {PACKAGE_PIN T4 IOSTANDARD LVCMOS33} [get_ports uart_tx]
 # Pmod：exp_io0/1/2 = B16 A15 A13
 #   exp_io0 -> fan_pwm（4 线风扇 PWM 输入）
 #   exp_io1 -> fan_tach（风扇转速反馈，外部上拉）
-#   exp_io2 -> dht_dq（AM2301 单总线，外部 4.7k 上拉到 3.3V）
+#   exp_io2 -> dht_dq（AM2302 单总线，外部 4.7k 上拉到 3.3V）
 #-----------------------------------------------------------------------
 set_property -dict {PACKAGE_PIN B16 IOSTANDARD LVCMOS33} [get_ports fan_pwm]
 set_property -dict {PACKAGE_PIN A15 IOSTANDARD LVCMOS33} [get_ports fan_tach]

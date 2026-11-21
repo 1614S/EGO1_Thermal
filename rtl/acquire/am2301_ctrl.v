@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 //======================================================================
-// am2301_ctrl.v —— AM2301 / DHT21 单总线温湿度传感器驱动
+// am2301_ctrl.v —— AM2302 / DHT22 单总线温湿度传感器驱动（AM2301/DHT21 协议兼容，可直接替换）
 //
 // 时序（100 MHz = 10 ns/cycle）：
 //   主机拉低 1.2 ms -> 释放 -> 传感器 80us 低 + 80us 高
@@ -15,7 +15,7 @@
 
 module am2301_ctrl #(
     parameter integer CLK_HZ    = 100_000_000,
-    parameter integer PERIOD_US = 2_000_000
+    parameter integer PERIOD_US = 2_500_000
 ) (
     input  wire               clk,
     input  wire               rst_n,
@@ -56,7 +56,7 @@ module am2301_ctrl #(
     reg [39:0] sh;
     reg        bit_v;
     reg        drive_low;
-    reg [20:0] us_cnt;
+    reg [21:0] us_cnt;                     // 22 位：2.5 s @1 MHz = 2 500 000
     reg        start_pulse;
 
     //------------------------------------------------------------------
@@ -86,16 +86,16 @@ module am2301_ctrl #(
     //------------------------------------------------------------------
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            us_cnt      <= 21'd0;
+            us_cnt      <= 22'd0;
             start_pulse <= 1'b0;
         end else begin
             start_pulse <= 1'b0;
             if (st == S_IDLE) begin
                 if (us_cnt >= PERIOD_US-1) begin
-                    us_cnt      <= 21'd0;
+                    us_cnt      <= 22'd0;
                     start_pulse <= 1'b1;
                 end else if (tick_us) begin
-                    us_cnt <= us_cnt + 21'd1;
+                    us_cnt <= us_cnt + 22'd1;
                 end
             end
         end

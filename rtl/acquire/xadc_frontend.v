@@ -50,6 +50,19 @@ module xadc_frontend #(
     reg [15:0] ms_cnt;
     reg [15:0] hold_cnt;
 
+    //------------------------------------------------------------------
+    // 8 点滑动平均（10 ms 采样率 → 80 ms 窗口，群延迟约 35 ms）
+    //   XADC 片上温度传感器单样本有几个 LSB 的噪声（1 LSB = 0.123 ℃），
+    //   直接送显示会让最后一位跳约 ±0.5 ℃。这里在 10 ms 采样点上平均，
+    //   端到端仍是 100 ms 采样 + 35 ms，远小于 200 ms 指标。
+    //   注意：不能在 100 ms 的显示口上平均——那等于 800 ms 窗口。
+    //------------------------------------------------------------------
+    reg signed [15:0] ah [0:7];
+    reg signed [19:0] asum, asum_n;
+    reg signed [15:0] tj_sat_n;
+    reg               afirst;
+    integer           ai;
+
     // code*63/2 - 69926，32 位补码；正常范围 -10240…32000
     // XADC 的测量结果在 DO[15:4]（高位对齐，低 4 位恒 0），不是 DO[11:0]。
     // 取低 12 位等于把码值缩小 16 倍，上板表现为 Tj 在 −40…−3 ℃ 之间乱跳。
@@ -83,6 +96,9 @@ module xadc_frontend #(
             t_calc_r <= 32'd0;
             drdy_to  <= 21'd0;
             timeout_cnt <= 16'd0;
+            for (ai = 0; ai < 8; ai = ai + 1) ah[ai] <= 16'sd0;
+            asum    <= 20'sd0;
+            afirst  <= 1'b1;
         end else begin
             tj_valid <= 1'b0;
             den      <= 1'b0;
@@ -133,15 +149,29 @@ module xadc_frontend #(
                     end
                 end
 
-                // 第二级：饱和 + 输出，组合逻辑只剩比较
+                // 第二级：饱和 + 8 点平均 + 输出
                 S_CONV: begin
                     tj_valid <= 1'b1;
                     if ($signed(t_calc_r) > 32'sd32000)
-                        tj_q8_8 <= 16'sd32000;
+                        tj_sat_n = 16'sd32000;
                     else if ($signed(t_calc_r) < -32'sd10240)
-                        tj_q8_8 <= -16'sd10240;
+                        tj_sat_n = -16'sd10240;
                     else
-                        tj_q8_8 <= t_calc_r[15:0];
+                        tj_sat_n = t_calc_r[15:0];
+
+                    if (afirst) begin
+                        // 首个样本直接填满窗口，避免上电后前 80 ms 显示偏低
+                        for (ai = 0; ai < 8; ai = ai + 1) ah[ai] <= tj_sat_n;
+                        asum    <= {{4{tj_sat_n[15]}}, tj_sat_n} <<< 3;   // ×8（20 bit 内不溢出）
+                        tj_q8_8 <= tj_sat_n;
+                        afirst  <= 1'b0;
+                    end else begin
+                        asum_n = asum - {{4{ah[7][15]}}, ah[7]} + {{4{tj_sat_n[15]}}, tj_sat_n};
+                        for (ai = 7; ai > 0; ai = ai - 1) ah[ai] <= ah[ai-1];
+                        ah[0]  <= tj_sat_n;
+                        asum   <= asum_n;
+                        tj_q8_8 <= asum_n >>> 3;
+                    end
                     st <= S_WAIT;
                 end
 

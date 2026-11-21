@@ -4,7 +4,7 @@
 //
 // 证明两件事（这是整个虚拟热台能不能骗过真实驱动程序的判据）：
 //   1. xadc_vplant 的 DRP 从机时序与 XADC 一致 → 现有 xadc_frontend 能读数
-//   2. am2301_vplant 的 1-Wire 时序与 AM2301 一致 → 现有 am2301_ctrl 能解出
+//   2. am2301_vplant 的 1-Wire 时序与 AM2302 一致 → 现有 am2301_ctrl 能解出
 //      正确的温度/湿度，且注入的校验错会被驱动判成 err
 //======================================================================
 `include "vplant_pkg.vh"
@@ -84,7 +84,7 @@ module tb_vplant_if;
                      u_host.sh, u_host.sum8, u_host.chk, u_vsen.sh);
         if (rst_n && ext_valid) begin
             nconv = nconv + 1;
-            $display("[AM2301] #%0d valid: T=%0d (%.3f C)  RH=%0d (%.2f %%)  err_cnt=%0d",
+            $display("[AM2302] #%0d valid: T=%0d (%.3f C)  RH=%0d (%.2f %%)  err_cnt=%0d",
                      nconv, t_q8_8, $itor(t_q8_8)/256.0,
                      rh_q8_8, $itor(rh_q8_8)/256.0, ext_err_cnt);
         end

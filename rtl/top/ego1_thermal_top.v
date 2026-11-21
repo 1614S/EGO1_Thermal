@@ -2,7 +2,7 @@
 //======================================================================
 // ego1_thermal_top.v —— 顶层（只连线，不写算法）
 //
-// 数据链：XADC/AM2301 -> acq_fsm -> calib -> MA8 -> IIR -> PI -> PWM -> 风扇
+// 数据链：XADC/AM2302 -> acq_fsm -> calib -> MA8 -> IIR -> PI -> PWM -> 风扇
 // 遥测  ：sample -> frame_pack -> uart_tx
 // 执行  ：MMCM DRP 切档 + 自热负载
 //======================================================================
@@ -16,7 +16,7 @@ module ego1_thermal_top (
     input  wire [7:0]  sw,
     output wire [15:0] led,
     output wire [7:0]  seg,
-    output wire [3:0]  an,
+    output wire [7:0]  an,           // 低 4 位扫描，高 4 位恒灭
     output wire        uart_tx,
     input  wire        uart_rx,
     output wire        fan_pwm,
@@ -25,7 +25,7 @@ module ego1_thermal_top (
 );
 
     //------------------------------------------------------------------
-    // 虚拟热台与真实器件的选择：sw[6]=1 用虚拟热台，=0 用真实 XADC/AM2301
+    // 虚拟热台与真实器件的选择：sw[6]=1 用虚拟热台，=0 用真实 XADC/AM2302
     //   （上板默认 sw6=0；没有风扇/加热片时手动拨到 1 就能跑完整闭环演示）
     //------------------------------------------------------------------
     wire plant_sel = sw[6];
@@ -103,7 +103,7 @@ module ego1_thermal_top (
 `ifdef SIM_MODEL
     localparam integer EXT_PERIOD_US = 1000;       // 仿真 1 ms（事务本身 5.5 ms，忙时自动跳过）
 `else
-    localparam integer EXT_PERIOD_US = 2_000_000;  // 硬件 2 s（器件要求）
+    localparam integer EXT_PERIOD_US = 2_500_000;  // 硬件 2.5 s（器件要求 ≥2 s，留 25% 余量）
 `endif
 
     am2301_ctrl #(
@@ -363,10 +363,10 @@ module ego1_thermal_top (
     // 决策：PI + 监督
     //------------------------------------------------------------------
     //------------------------------------------------------------------
-    // 前馈：ΔT = Tset − 外部温度（两路模式下都可用：虚拟热台/AM2301）
+    // 前馈：ΔT = Tset − 外部温度（两路模式下都可用：虚拟热台/AM2302）
     //   稳态所需占空比 ≈ FF_A − FF_B·ΔT，把 PI 从"爬山"里解放出来
     //------------------------------------------------------------------
-    // AM2301 上电后要 5 ms 才出第一帧（仿真加速下等于几十秒物理时间），
+    // AM2302 上电后要 5 ms 才出第一帧（仿真加速下等于几十秒物理时间），
     // 这段时间外部温度是 0，前馈会被算成"环境 0 ℃"而失效 → 先用 25 ℃ 占位
     reg ext_seen;
     always @(posedge clk_sys or negedge rst_sys_n) begin
@@ -523,7 +523,7 @@ module ego1_thermal_top (
 
     //------------------------------------------------------------------
     // 虚拟热台（plant_sel=1 时：虚拟风扇 + 虚拟功耗 + 虚拟环境 + 2R2C 芯片）
-    //   设计原则：vplant 只在"器件接口层"接管（XADC 的 DRP、AM2301 的单总线），
+    //   设计原则：vplant 只在"器件接口层"接管（XADC 的 DRP、AM2302 的单总线），
     //   中间所有算法/控制/遥测 RTL 一行不改 → 真实与虚拟走同一条数据链，
     //   联调时哪一段出问题一望即知。
     //------------------------------------------------------------------
@@ -633,8 +633,12 @@ module ego1_thermal_top (
     reg  [2:0]  send_d;
 
     // 命令回复优先占用 UART（人敲命令的频率远低于 10 Hz 遥测）
-    assign tx_start = cmd_busy ? cmd_tx_start : fb_tx_start;
-    assign tx_data  = cmd_busy ? cmd_tx_data  : fb_tx_data;
+    //
+    // 仲裁要用 busy | tx_start：cmd_proc 在同一拍同时把 busy 和 tx_start 置 1，
+    // 只判寄存后的 busy 会漏掉回复的第一个字节（上板实测回复变短/乱码）。
+    wire cmd_sel = cmd_busy | cmd_tx_start;
+    assign tx_start = cmd_sel ? cmd_tx_start : fb_tx_start;
+    assign tx_data  = cmd_sel ? cmd_tx_data  : fb_tx_data;
 
     //------------------------------------------------------------------
     // 命令通道（ASCII，115200）：标定、改 Kp/Ki、清报警、读状态
@@ -723,29 +727,101 @@ module ego1_thermal_top (
 
     //------------------------------------------------------------------
     // 显示
+    //   btn[3]（板上 V1）按一下翻一页：0=结温 Tj、1=设定值、2=PWM 占空比、3=外部温度
+    //   sw[4]=1 仍显示自检图案 "1.234"
+    //
+    //   翻页键做 20 ms 去抖 + "必须先见到松开状态才允许翻页"：
+    //   上电/重载比特流时 V1 若因按键电容或悬空被读成低电平，
+    //   旧写法会当成一次按键把页翻走，默认页就不是结温了（上板遇到过）。
     //------------------------------------------------------------------
-    wire        text_mode = sw[7];
+    reg [2:0]  pg_sync;
+    reg        pg_stable, pg_prev, pg_armed;
+    reg [20:0] pg_cnt;                                       // 21 位：20 ms @100 MHz = 2 000 000
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n) begin
+            pg_sync   <= 3'b000;                             // 初值按"低"算，
+            pg_stable <= 1'b0;                               // 必须先看到松开（高）
+            pg_prev   <= 1'b0;                               // 才 pg_armed=1
+            pg_armed  <= 1'b0;
+            pg_cnt    <= 21'd0;
+        end else begin
+            pg_sync <= {pg_sync[1:0], btn[3]};
+            if (pg_sync[2] == pg_stable) begin
+                pg_cnt <= 21'd0;
+            end else if (pg_cnt >= 21'd2_000_000) begin      // 20 ms @100 MHz
+                pg_stable <= pg_sync[2];
+                pg_cnt    <= 21'd0;
+            end else begin
+                pg_cnt <= pg_cnt + 21'd1;
+            end
+            pg_prev <= pg_stable;
+            if (pg_stable) pg_armed <= 1'b1;                 // 松开过一次才允许翻页
+        end
+    end
+    wire pg_press = pg_armed & pg_prev & ~pg_stable;         // 按下沿
+
+    reg [1:0] disp_page;
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n)                 disp_page <= 2'd0;   // 默认 = 结温页
+        else if (pg_press)              disp_page <= disp_page + 2'd1;
+    end
+
     // 显示必须用"标定后的原始值"而不是重滤波值：MA8 的窗口是 8×100 ms = 800 ms，
     // 用 tj_filt 显示会把"端到端延迟 ≤200 ms"直接击穿（docs/01 §2.4 本来也是这么定的）
-    wire signed [15:0] disp_val = text_mode ? text_cal : tj_cal;
+    wire signed [15:0] disp_val = (disp_page == 2'd1) ? $signed({1'b0, setpoint}) :
+                                  (disp_page == 2'd3) ? text_cal :
+                                  (disp_page == 2'd0) ? tj_cal   : 16'sd0;
     wire [15:0] disp_abs = disp_val[15] ? (~disp_val + 16'd1) : disp_val;
-    wire [15:0] t01 = (disp_abs * 16'd5) >> 7;        // 0.1 ℃ 单位
+    // 注意位宽：disp_abs 是 Q8.8，×5 后 51.2 ℃(13107) 就会超过 16 位，
+    // 原来写成 16 位上下文会直接溢出归零（上板实测 >51 ℃ 显示翻回 00.0）。
+    wire [20:0] t01_w = disp_abs * 21'd5;            // 中间量扩到 21 位
+    wire [15:0] t01   = t01_w[19:7];                 // /128 → 0.1 ℃ 单位
 
-    // 十进制拆分：/10 ≈ ×205 >> 11，/100 ≈ ×2621 >> 18（避免常数除数位链）
+    // 十进制拆分：/10 ≈ ×205 >> 11，/100 ≈ ×2622 >> 18（避免常数除数位链）
+    //   2622/2^18 = 0.0100021（略大于 0.01），向下取整才对；
+    //   原来用 2621（0.0099988，略小），遇到整百（t01=500 → 4.999）会算成 4，
+    //   50.0 ℃ 就显示成 "4A.0"（上板实测）。
     wire [27:0] d_mul10  = t01 * 11'd205;
     wire [15:0] t_div10  = d_mul10[26:11];               // t01/10
-    wire [33:0] d_mul100 = t01 * 18'd2621;
+    wire [33:0] d_mul100 = t01 * 18'd2622;
     wire [15:0] t_div100 = d_mul100[33:18];              // t01/100
     wire [3:0]  d0 = (t01 - t_div10 * 16'd10);           // 个位（0.1 ℃）
     wire [3:0]  d1 = (t_div10 - t_div100 * 16'd10);      // 十位（℃ 个位）
     wire [3:0]  d2_raw = t_div100[3:0];
     wire [3:0]  d2 = (d2_raw > 4'd9) ? (d2_raw - 4'd10) : d2_raw;
 
+    //------------------------------------------------------------------
+    // 占空比页：duty 0…1000 直接显示 4 位十进制（不带小数点）
+    //------------------------------------------------------------------
+    wire [15:0] du     = {5'd0, duty};
+    wire [3:0]  du_k   = (du >= 16'd1000) ? 4'd1 : 4'd0;          // 千位
+    wire [15:0] du_r   = du - (du_k ? 16'd1000 : 16'd0);
+    // 乘积必须先落到 22 位中间量：du_r ≤ 999，999×2622 = 2.6 M 需要 22 位，
+    // 直接写 `(du_r * 18'd2622) >> 18` 会被赋值的 16 位上下文截断，
+    // 拆位出现 10~15（数码管显示 A~F）——上板实测过。
+    wire [21:0] du_m100 = du_r * 18'd2622;
+    wire [21:0] du_m10  = du_r * 11'd205;
+    wire [15:0] du_100 = du_m100[21:18];                          // 百位
+    wire [15:0] du_10  = du_m10[21:11];                           // 十位
+    wire [15:0] du_t10 = du_10  - du_100 * 16'd10;
+    wire [15:0] du_o10 = du_r   - du_10  * 16'd10;
+
+    // 实测确认：an[0] 在最左；小数点画在所选数字右侧
+    //   左1=digits[3:0]，左2=[7:4]，左3=[11:8]，左4=[15:12]
+    wire [3:0]  p_a = (disp_page == 2'd2) ? du_k       : 4'hF;
+    wire [3:0]  p_b = (disp_page == 2'd2) ? du_100[3:0] : d2;
+    wire [3:0]  p_c = (disp_page == 2'd2) ? du_t10[3:0] : d1;
+    wire [3:0]  p_d = (disp_page == 2'd2) ? du_o10[3:0] : d0;
+
+    wire [15:0] seg_digits = sw[4] ? 16'h4321 : {p_d, p_c, p_b, p_a};
+    wire [3:0]  seg_dp     = sw[4] ? 4'b0001 :
+                             ((disp_page == 2'd2) ? 4'b0000 : 4'b0100);
+
     seg7_scan #(.DIV(100000)) u_seg (
         .clk   (clk_sys),
         .rst_n (rst_sys_n),
-        .digits({4'hF, d2, d1, d0}),
-        .dp    (4'b0010),
+        .digits(seg_digits),
+        .dp    (seg_dp),
         .seg   (seg),
         .an    (an)
     );
@@ -756,7 +832,19 @@ module ego1_thermal_top (
         else            heart <= heart + 24'd1;
     end
 
-    assign led[0]    = alarm;
+    //------------------------------------------------------------------
+    // LED 语义（state 编码：0=NORMAL 1=WARN 2=HOT 3=CRIT）
+    //   led[0]  任意告警（WARN 起亮）
+    //   led[1]  HOT 及以上
+    //   led[2]  CRIT 及以上（只有 state==3 亮）
+    //   led[3]  MMCM 未锁定（正常应灭）
+    //   led[6:4] 当前档位（二进制 000~100）
+    //   led[7]  风扇堵转/断线（无风扇时常亮；虚拟热台模式下应灭）
+    //   led[15:8] 心跳
+    // 仿真证据（.work/tb_sup_led.sv）：NORMAL 000 → WARN 100 → HOT 110 → CRIT 111
+    //   → 降温+clr 回 000；supervisor 的 alarm 只在 CRIT 锁存，仍在遥测 flags bit0。
+    //------------------------------------------------------------------
+    assign led[0]    = (state != 2'd0);   // 任意告警：WARN/HOT/CRIT 都亮
     assign led[1]    = (state >= 2'd2);
     assign led[2]    = (state == 2'd3);
     assign led[3]    = ~locked;

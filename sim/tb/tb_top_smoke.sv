@@ -189,7 +189,7 @@ module tb_top_smoke;
             (u_dut.switch_max_us < 16'd10000)) begin   // 单位 0.1 µs → 1 ms = 10000
             $display("TEST PASSED (tb_top_smoke)");
             if (last_text == 16'sd0)
-                $display("NOTE: AM2301 通道仍未输出有效值（已知问题，见 README）");
+                $display("NOTE: AM2302 通道仍未输出有效值（已知问题，见 README）");
         end else begin
             $display("TEST FAILED (tb_top_smoke)");
             $fatal(1, "top smoke failed");
