@@ -17,7 +17,11 @@
 //
 // 积分允许取负：有前馈时，前馈的偏置误差只能靠负积分修掉。
 //======================================================================
-module pi_ctrl (
+module pi_ctrl #(
+    parameter integer INVERT_ERROR = 0,     // 0 = 制冷（风扇：T>sp 加 duty）；1 = 加热（T<sp 加 duty）
+    parameter integer SP_RAMP = 64,         // 设定值斜坡，Q8.8 K/样本；64 = 0.25 K
+    parameter integer E_ILIM   = 32767      // 积分分离阈值（Q8.8）；32767 等于不分离
+) (
     input  wire               clk,
     input  wire               rst_n,
     input  wire               update,
@@ -68,17 +72,18 @@ module pi_ctrl (
                     sp_eff <= tj_filt;
                     first  <= 1'b0;
                     sp_c   <= tj_filt;
-                end else if (sp_eff + 16'sd64 < setpoint) begin
-                    sp_eff <= sp_eff + 16'sd64;   // +0.25 ℃/样本
+                end else if (sp_eff + SP_RAMP < setpoint) begin
+                    sp_eff <= sp_eff + SP_RAMP;
                     sp_c   <= sp_eff;
-                end else if (sp_eff - 16'sd64 > setpoint) begin
-                    sp_eff <= sp_eff - 16'sd64;
+                end else if (sp_eff - SP_RAMP > setpoint) begin
+                    sp_eff <= sp_eff - SP_RAMP;
                     sp_c   <= sp_eff;
                 end else begin
                     sp_eff <= setpoint;
                     sp_c   <= setpoint;
                 end
-                e_c <= $signed(tj_filt) - $signed(sp_c);
+                e_c <= INVERT_ERROR ? ($signed(sp_c) - $signed(tj_filt))
+                                     : ($signed(tj_filt) - $signed(sp_c));
             end
         end
     end
@@ -92,10 +97,16 @@ module pi_ctrl (
             i_r <= 40'sd0;
         end else if (upd_d[0]) begin
             p_r <= ($signed(e_c) * $signed({1'b0, kp_q8_8})) >>> 16;
-            // e[Q8.8] × Ki[Q8.8] = Q16.16 duty → 右移 8 位得 Q8.8，并按积分范围饱和
-            i_r <= (($signed(e_c) * $signed({4'd0, ki_q8_8[11:0]})) >>> 8) > I8_MAX ? I8_MAX :
+            // 积分分离：|e| > E_ILIM 时冻结积分（过渡过程只靠 P + 前馈），
+            // 避免慢对象（加热器 τ 几十秒）把积分积到饱和造成大超调
+            if ((e_c > E_ILIM) || (e_c < -E_ILIM)) begin
+                i_r <= 40'sd0;
+            end else begin
+                // e[Q8.8] × Ki[Q8.8] = Q16.16 duty → 右移 8 位得 Q8.8，并按积分范围饱和
+                i_r <= (($signed(e_c) * $signed({4'd0, ki_q8_8[11:0]})) >>> 8) > I8_MAX ? I8_MAX :
                    (($signed(e_c) * $signed({4'd0, ki_q8_8[11:0]})) >>> 8) < I8_MIN ? I8_MIN :
                     (($signed(e_c) * $signed({4'd0, ki_q8_8[11:0]})) >>> 8);
+            end
         end
     end
 

@@ -20,6 +20,7 @@ module ego1_thermal_top (
     output wire        uart_tx,
     input  wire        uart_rx,
     output wire        fan_pwm,
+    output wire        heat_pwm,       // 环境加热电阻 PWM（B18 / J5-7）
     input  wire        fan_tach,
     inout  wire        dht_dq
 );
@@ -499,6 +500,44 @@ module ego1_thermal_top (
     );
 
     //------------------------------------------------------------------
+    // 环境温度闭环（AM2302 → 加热电阻 PWM，B18/J5-7）
+    //   设定值：命令 SE=xx.x 写入寄存器 0x0E（Q8.8），默认 40.0 ℃
+    //   增益：先给一组保守常数（环境对象比结温慢、增益小），需要时再改成命令可调
+    //   安全：告警/超温/外部数据失效/时钟未锁定时强制 0，避免"故障反而猛加热"
+    //------------------------------------------------------------------
+    reg signed [15:0] setpoint_ext;
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n)                                          setpoint_ext <= 16'sd10240;  // 40.0 ℃
+        else if (cmd_wr_en && cmd_wr_addr == 6'h0E)              setpoint_ext <= cmd_wr_data[15:0];
+    end
+
+    wire        heater_en = locked && (state != 2'd3) && (ext_age < 16'd100)
+                            && (text_filt < 16'sd19200);       // < 75 ℃ 才允许加热
+    wire [10:0] duty_ext;
+    wire        ext_sat;
+
+    ext_loop u_ext (
+        .clk      (clk_sys),
+        .rst_n    (rst_sys_n),
+        .update   (sample_valid),
+        .t_ext    (text_filt),
+        .t_room   (16'sd6400),       // 室温参考 25.0 ℃（前馈基准；未单独测室温时的保守假设）
+        .sp_ext   (setpoint_ext),
+        .kp_q8_8  (16'd512),         // Kp = 2.0 duty/℃（对象增益仅 0.25 K/duty，不能大）
+        .ki_q8_8  (16'd3),           // Ki = 0.01 duty/(℃·样本)；配合积分分离(1 K)防超调
+        .heater_en(heater_en),
+        .duty     (duty_ext),
+        .saturated(ext_sat)
+    );
+
+    pwm_gen u_pwm_heat (
+        .clk   (clk_sys),
+        .rst_n (rst_sys_n),
+        .duty  (duty_ext),
+        .pwm   (heat_pwm)
+    );
+
+    //------------------------------------------------------------------
     // 执行：自热负载（core 域）+ 测频
     //------------------------------------------------------------------
     wire [15:0] act_cnt;
@@ -673,6 +712,7 @@ module ego1_thermal_top (
         .tj_f     (tj_filt),
         .setpoint (setpoint),
         .duty     (duty),
+        .duty_heat(duty_ext),
         .gear     (gear),
         .state    (state),
         .tj_raw   (tj_s),
@@ -681,6 +721,8 @@ module ego1_thermal_top (
         .cal_b    (cal_b),
         .ext_err_cnt (ext_err_cnt),
         .ext_crc_cnt (ext_crc_cnt),
+        .fan_rpm     (fan_rpm),
+        .fan_fail_cnt(fan_fail_cnt),
         .n_cmd    (cmd_n_cmd),
         .n_err    (cmd_n_err),
         .n_cal    (cmd_n_cal)
