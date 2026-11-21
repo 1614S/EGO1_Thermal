@@ -39,6 +39,7 @@ module cmd_proc (
     output reg  [31:0]        wr_data,
     input  wire signed [15:0] tj_f,
     input  wire        [15:0] setpoint,
+    input  wire signed [15:0] tset_ext,        // 环境温度设定值（SE=）
     input  wire        [10:0] duty,
     input  wire        [10:0] duty_heat,       // 环境加热 PWM 占空比，用于 ? 状态行的 H= 字段
     input  wire        [2:0]  gear,
@@ -84,11 +85,12 @@ module cmd_proc (
     // 回复格式化的中间量（不能在表达式上直接取位，Verilog 会报语法错）
     reg [15:0] f_d100, f_d10, f_x1, f_x0;
     // '?' 状态行的格式化结果（分两拍算出来，再在 S_ACT 里只做拼接）
-    reg [15:0] t_tj10, t_sp10, t_du10, t_ex10, t_ht10;
+    reg [15:0] t_tj10, t_sp10, t_du10, t_ex10, t_ht10, t_se10;
     reg        t_tjneg, t_exneg;
     reg  [3:0] tj_d2, tj_d1, tj_d0, sp_d2, sp_d1, sp_d0, du_d3, du_d2, du_d1, du_d0;
     reg  [3:0] ex_d2, ex_d1, ex_d0;
     reg  [3:0] ht_d3, ht_d2, ht_d1, ht_d0;
+    reg  [3:0] se_d2, se_d1, se_d0;
 
     //------------------------------------------------------------------
     // 回复构造
@@ -296,6 +298,8 @@ module cmd_proc (
                                             : ((setpoint * 21'd5) >> 7);
                     t_du10  <= {5'd0, duty};
                     t_ht10  <= {5'd0, duty_heat};
+                    t_se10  <= tset_ext[15] ? (((~tset_ext + 16'd1) * 21'd5) >> 7)
+                                            : ((tset_ext * 21'd5) >> 7);
                     t_exneg <= text_f[15];
                     t_ex10  <= text_f[15] ? (((~text_f + 16'd1) * 21'd5) >> 7)
                                           : ((text_f * 21'd5) >> 7);
@@ -334,6 +338,11 @@ module cmd_proc (
                     ht_d2 <= f_d100[3:0] - ((t_ht10 >= 16'd1000) ? 4'd10 : 4'd0);
                     ht_d1 <= f_x1[3:0]; ht_d0 <= f_x0[3:0];
 
+                    f_d100 = div100(t_se10); f_d10 = div10(t_se10);
+                    f_x1   = f_d10 - f_d100 * 16'd10;
+                    f_x0   = t_se10 - f_d10 * 16'd10;
+                    se_d2 <= f_d100[3:0]; se_d1 <= f_x1[3:0]; se_d0 <= f_x0[3:0];
+
                     st <= S_ACT;
                 end
 
@@ -353,6 +362,10 @@ module cmd_proc (
                             putc(8'h20); putc(8'h53); putc(8'h3D);
                             putc(8'h30 + {4'd0, sp_d2}); putc(8'h30 + {4'd0, sp_d1});
                             putc(8'h2E); putc(8'h30 + {4'd0, sp_d0});
+                            // 环境温度设定值 SE=xx.x（与命令 SE= 同名）
+                            putc(8'h20); putc(8'h53); putc(8'h45); putc(8'h3D);
+                            putc(8'h30 + {4'd0, se_d2}); putc(8'h30 + {4'd0, se_d1});
+                            putc(8'h2E); putc(8'h30 + {4'd0, se_d0});
                             putc(8'h20); putc(8'h44); putc(8'h3D);
                             putc(8'h30 + {4'd0, du_d3}); putc(8'h30 + {4'd0, du_d2});
                             putc(8'h30 + {4'd0, du_d1}); putc(8'h30 + {4'd0, du_d0});

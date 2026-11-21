@@ -510,12 +510,17 @@ module ego1_thermal_top (
 
     // S4（btn[4]）独立边沿检测：原有 btn_pressed/btn_pulse 只有 4 位（S0~S3），
     // 直接引用 btn_pulse[4] 是越界的（上板表现：按 S4 没反应）。
-    reg s4_d;
+    reg s4_d, s4_armed;
     always @(posedge clk_sys or negedge rst_sys_n) begin
-        if (!rst_sys_n) s4_d <= 1'b1;            // 按键低有效，空闲为高
-        else            s4_d <= btn[4];
+        if (!rst_sys_n) begin
+            s4_d     <= 1'b1;                    // 按键低有效，空闲为高
+            s4_armed <= 1'b0;
+        end else begin
+            s4_d <= btn[4];
+            if (btn[4]) s4_armed <= 1'b1;        // 上电保护：先看到松开，才允许计数
+        end
     end
-    wire s4_press = s4_d & ~btn[4];              // 高→低 = 按下
+    wire s4_press = s4_armed & s4_d & ~btn[4];   // 高→低 = 按下
 
     always @(posedge clk_sys or negedge rst_sys_n) begin
         if (!rst_sys_n) begin
@@ -713,6 +718,7 @@ module ego1_thermal_top (
         .wr_data  (cmd_wr_data),
         .tj_f     (tj_filt),
         .setpoint (setpoint),
+        .tset_ext (setpoint_ext),
         .duty     (duty),
         .duty_heat(duty_ext),
         .gear     (gear),
@@ -749,7 +755,9 @@ module ego1_thermal_top (
         .text_in  (text_filt),
         .rh_in    (rh_s),
         .tset_in  (setpoint),
+        .tset_ext_in (setpoint_ext),            // 环境温度设定值（byte28-29）
         .duty_in  (duty),
+        .duty_heat_in(duty_ext),                // 加热占空比（byte20/21 高位）
         .gear_in  (gear),
         .state_in (state),
         .f_in     (f_meas),

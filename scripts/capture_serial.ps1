@@ -10,7 +10,7 @@ capture_serial.ps1 —— 读 EGO1 的 32 字节遥测帧 → CSV（不依赖 py
 
 输出：
     - 每帧解析结果（可选 -Verbose 逐帧打印）
-    - CSV：t_s,tj_c,text_c,rh_pct,tset_c,duty,gear,state,f_mhz,p_mw,age,flags,seq
+    - CSV：t_s,tj_c,text_c,rh_pct,tset_c,duty,gear,state,f_mhz,p_mw,age,flags,seq,tset_ext_c,duty_heat
     - 汇总：帧数、CRC 错、帧头错、seq 跳变次数、Tj 最小/最大
 #>
 param(
@@ -89,8 +89,10 @@ while ($sw.Elapsed.TotalSeconds -lt $Seconds) {
         $rh    = (([int]$f[14] -bor ([int]$f[15] -shl 8))) / 10.0
         $tset  = Q8_8 $f[16] $f[17]
         $duty  = [int]$f[18] -bor ([int]$f[19] -shl 3)
-        $gear  = [int]$f[20]
-        $state = [int]$f[21]
+        $gear  = ([int]$f[20]) -band 0x07
+        $state = ([int]$f[21]) -band 0x03
+        $dutyH = (([int]$f[20] -shr 3) -bor (([int]$f[21] -shr 2) -shl 5))
+        $tsetE = Q8_8 $f[28] $f[29]
         $fq    = (([int]$f[22] -bor ([int]$f[23] -shl 8))) / 10.0
         $p     = [int]$f[24] -bor ([int]$f[25] -shl 8)
         $age   = [int]$f[26]
@@ -104,12 +106,12 @@ while ($sw.Elapsed.TotalSeconds -lt $Seconds) {
         if ($tj -lt $tjMin) { $tjMin = $tj }
         if ($tj -gt $tjMax) { $tjMax = $tj }
 
-        $rows.Add(("{0:F2},{1:F2},{2:F2},{3:F1},{4:F2},{5},{6},{7},{8:F1},{9},{10},{11},{12}" -f `
-            $trel, $tj, $text, $rh, $tset, $duty, $gear, $state, $fq, $p, $age, $flags, $seq))
+        $rows.Add(("{0:F2},{1:F2},{2:F2},{3:F1},{4:F2},{5},{6},{7},{8:F1},{9},{10},{11},{12},{13:F2},{14}" -f `
+            $trel, $tj, $text, $rh, $tset, $duty, $gear, $state, $fq, $p, $age, $flags, $seq, $tsetE, $dutyH))
 
         if (-not $Quiet -and ($nFrame % 10) -eq 0) {
-            Write-Host ("帧{0,4}  T={1,6:F2}℃  Tset={2:F1}  TEXT={3:F2}  RH={4:F1}%  duty={5,3}  gear={6}  f={7:F1}MHz  P={8}mW  state={9}" -f `
-                $nFrame, $tj, $tset, $text, $rh, $duty, $gear, $fq, $p, $state)
+            Write-Host ("帧{0,4}  T={1,6:F2}℃  Tset={2:F1}  TEXT={3:F2}  RH={4:F1}%  duty={5,3}  SE={6:F1}  Hduty={7,4}  gear={8}  f={9:F1}MHz  P={10}mW  state={11}" -f `
+                $nFrame, $tj, $tset, $text, $rh, $duty, $tsetE, $dutyH, $gear, $fq, $p, $state)
         }
     }
 }
@@ -118,7 +120,7 @@ $sp.Close()
 if ($Csv -ne "") {
     $dir = Split-Path -Parent $Csv
     if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    "t_s,tj_c,text_c,rh_pct,tset_c,duty,gear,state,f_mhz,p_mw,age,flags,seq" | Set-Content -Path $Csv -Encoding utf8
+    "t_s,tj_c,text_c,rh_pct,tset_c,duty,gear,state,f_mhz,p_mw,age,flags,seq,tset_ext_c,duty_heat" | Set-Content -Path $Csv -Encoding utf8
     $rows | Add-Content -Path $Csv -Encoding utf8
     if (-not $Quiet) { Write-Host "CSV -> $Csv ($($rows.Count) 行)" }
 }

@@ -15,6 +15,8 @@ module frame_pack (
     input  wire signed [15:0] text_in,
     input  wire        [15:0] rh_in,
     input  wire signed [15:0] tset_in,
+    input  wire signed [15:0] tset_ext_in,   // 环境温度设定值（Q8.8），占 byte28-29
+    input  wire        [10:0] duty_heat_in,  // 加热占空比，打包进 byte20/21 的空闲高位
     input  wire        [10:0] duty_in,
     input  wire        [2:0]  gear_in,
     input  wire        [1:0]  state_in,
@@ -36,8 +38,8 @@ module frame_pack (
     wire [31:0] rh_tmp = rh_r * 32'd10;        // 32 位上下文，否则 14080×10 会截断（踩过）
     wire [15:0] rh10   = rh_tmp[23:8];
     reg [31:0] ts_r;
-    reg signed [15:0] tj_r, text_r, tset_r;
-    reg [10:0] duty_r;
+    reg signed [15:0] tj_r, text_r, tset_r, tset_ext_r;
+    reg [10:0] duty_r, duty_heat_r;
     reg [2:0]  gear_r;
     reg [1:0]  state_r;
     reg [7:0]  age_r, flags_r;
@@ -87,16 +89,16 @@ module frame_pack (
                 5'd17: byte_at = tset_r[15:8];
                 5'd18: byte_at = {5'd0, duty_r[2:0]};
                 5'd19: byte_at = duty_r[10:3];
-                5'd20: byte_at = {5'd0, gear_r};
-                5'd21: byte_at = {6'd0, state_r};
+                5'd20: byte_at = {duty_heat_r[4:0], gear_r};        // 高 5 位 = 加热 duty 低 5 位（旧解析器仍可取 &0x07）
+                5'd21: byte_at = {duty_heat_r[10:5], state_r};     // 高 6 位 = 加热 duty 高 6 位（旧解析器 &0x03）
                 5'd22: byte_at = f_r[7:0];
                 5'd23: byte_at = f_r[15:8];
                 5'd24: byte_at = p_r[7:0];
                 5'd25: byte_at = p_r[15:8];
                 5'd26: byte_at = age_r;
                 5'd27: byte_at = flags_r;
-                5'd28: byte_at = 8'h00;
-                5'd29: byte_at = 8'h00;
+                5'd28: byte_at = tset_ext_r[7:0];
+                5'd29: byte_at = tset_ext_r[15:8];
                 5'd30: byte_at = crc[7:0];
                 5'd31: byte_at = crc[15:8];
                 default: byte_at = 8'h00;
@@ -127,7 +129,9 @@ module frame_pack (
             text_r   <= 16'sd0;
             rh_r     <= 16'd0;
             tset_r   <= 16'sd0;
+            tset_ext_r <= 16'sd0;
             duty_r   <= 11'd0;
+            duty_heat_r <= 11'd0;
             gear_r   <= 3'd0;
             state_r  <= 2'd0;
             f_r      <= 16'd0;
@@ -146,7 +150,9 @@ module frame_pack (
                         text_r  <= text_in;
                         rh_r    <= rh_in;
                         tset_r  <= tset_in;
+                        tset_ext_r <= tset_ext_in;
                         duty_r  <= duty_in;
+                        duty_heat_r <= duty_heat_in;
                         gear_r  <= gear_in;
                         state_r <= state_in;
                         f_r     <= f_in;
