@@ -98,12 +98,12 @@ module ego1_thermal_top (
     wire signed [15:0] t_ext;
     wire [15:0]        rh_ext;
     wire               ext_val, ext_err;
-    wire [15:0]        ext_err_cnt;
+    wire [15:0]        ext_err_cnt, ext_crc_cnt;
 
 `ifdef SIM_MODEL
     localparam integer EXT_PERIOD_US = 1000;       // 仿真 1 ms（事务本身 5.5 ms，忙时自动跳过）
 `else
-    localparam integer EXT_PERIOD_US = 2_500_000;  // 硬件 2.5 s（器件要求 ≥2 s，留 25% 余量）
+    localparam integer EXT_PERIOD_US = 3_000_000;  // 硬件 3 s（器件 ≥2 s；实测 2.5 s 仍会锁死总线，再放宽）
 `endif
 
     am2301_ctrl #(
@@ -118,7 +118,8 @@ module ego1_thermal_top (
         .rh_q8_8  (rh_ext),
         .valid    (ext_val),
         .err      (ext_err),
-        .err_cnt  (ext_err_cnt)
+        .err_cnt  (ext_err_cnt),
+        .crc_err_cnt (ext_crc_cnt)
     );
 
     //------------------------------------------------------------------
@@ -677,6 +678,8 @@ module ego1_thermal_top (
         .tj_raw   (tj_s),
         .cal_a    (cal_a),
         .cal_b    (cal_b),
+        .ext_err_cnt (ext_err_cnt),
+        .ext_crc_cnt (ext_crc_cnt),
         .n_cmd    (cmd_n_cmd),
         .n_err    (cmd_n_err),
         .n_cal    (cmd_n_cal)

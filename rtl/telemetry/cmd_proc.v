@@ -44,6 +44,8 @@ module cmd_proc (
     input  wire signed [15:0] tj_raw,
     input  wire        [15:0] cal_a,
     input  wire signed [15:0] cal_b,
+    input  wire        [15:0] ext_err_cnt,      // AM2302 总错误数
+    input  wire        [15:0] ext_crc_cnt,      // AM2302 校验错数
     output reg         [15:0] n_cmd,
     output reg         [15:0] n_err,
     output reg         [15:0] n_cal
@@ -335,6 +337,9 @@ module cmd_proc (
                             putc(8'h41); putc(8'h3D); put_hex4(cal_a);
                             putc(8'h20); putc(8'h42); putc(8'h3D); put_hex4(cal_b);
                             putc(8'h20); putc(8'h52); putc(8'h3D); put_hex4(tj_raw);
+                            // AM2302 诊断：E=总错误数，C=校验错数（C 增长说明传感器应答了但位解码错）
+                            putc(8'h20); putc(8'h45); putc(8'h3D); put_hex4(ext_err_cnt);
+                            putc(8'h20); putc(8'h43); putc(8'h3D); put_hex4(ext_crc_cnt);
                             putc(8'h0D); putc(8'h0A);
                         end
                         C_R: begin
