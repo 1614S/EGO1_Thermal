@@ -94,3 +94,15 @@ set_property -dict {PACKAGE_PIN B16 IOSTANDARD LVCMOS33} [get_ports fan_pwm]
 set_property -dict {PACKAGE_PIN A15 IOSTANDARD LVCMOS33 PULLTYPE PULLUP} [get_ports fan_tach]
 set_property -dict {PACKAGE_PIN A13 IOSTANDARD LVCMOS33 PULLTYPE PULLUP} [get_ports dht_dq]
 set_property -dict {PACKAGE_PIN B18 IOSTANDARD LVCMOS33} [get_ports heat_pwm]
+
+#-----------------------------------------------------------------------
+# 数码管第 1 组（右 4 位）段选：D4 E3 D3 F4 F3 E2 D2 H2
+#-----------------------------------------------------------------------
+set_property -dict {PACKAGE_PIN D4 IOSTANDARD LVCMOS33} [get_ports {seg2[0]}]
+set_property -dict {PACKAGE_PIN E3 IOSTANDARD LVCMOS33} [get_ports {seg2[1]}]
+set_property -dict {PACKAGE_PIN D3 IOSTANDARD LVCMOS33} [get_ports {seg2[2]}]
+set_property -dict {PACKAGE_PIN F4 IOSTANDARD LVCMOS33} [get_ports {seg2[3]}]
+set_property -dict {PACKAGE_PIN F3 IOSTANDARD LVCMOS33} [get_ports {seg2[4]}]
+set_property -dict {PACKAGE_PIN E2 IOSTANDARD LVCMOS33} [get_ports {seg2[5]}]
+set_property -dict {PACKAGE_PIN D2 IOSTANDARD LVCMOS33} [get_ports {seg2[6]}]
+set_property -dict {PACKAGE_PIN H2 IOSTANDARD LVCMOS33} [get_ports {seg2[7]}]

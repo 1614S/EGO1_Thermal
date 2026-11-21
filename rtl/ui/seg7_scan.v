@@ -21,7 +21,7 @@ module seg7_scan #(
     input  wire [15:0] digits,      // 4 组 BCD，digits[3:0] 为最低位
     input  wire [3:0]  dp,          // 小数点，1 点亮
     output wire [7:0]  seg,         // {dp,g,f,e,d,c,b,a}
-    output wire [7:0]  an           // 位选，低 4 位扫描，高 4 位恒灭
+    output wire [3:0]  an4          // 本位组 4 个位选（bit0 = 最左），由顶层拼成 an[7:0]
 );
 
     localparam integer W = (DIV > 1) ? $clog2(DIV) : 1;
@@ -30,7 +30,7 @@ module seg7_scan #(
     reg [1:0]   dig;
     reg [3:0]   nib;
     reg [7:0]   seg_l;              // 内部统一按“低有效”表示，输出前再转换
-    reg [7:0]   an_l;
+    reg [3:0]   an_l;
     reg         dp_r;
 
     //------------------------------------------------------------------
@@ -52,13 +52,13 @@ module seg7_scan #(
     // 译码 + 位选（内部低有效）
     //------------------------------------------------------------------
     always @(*) begin
-        an_l = 8'b1111_1111;        // 高 4 位默认熄灭（低有效 = 1）
+        an_l = 4'b1111;             // 低有效：1 = 灭
 
         case (dig)
-            2'd0: begin nib = digits[3:0];   an_l[3:0] = 4'b1110; dp_r = dp[0]; end
-            2'd1: begin nib = digits[7:4];   an_l[3:0] = 4'b1101; dp_r = dp[1]; end
-            2'd2: begin nib = digits[11:8];  an_l[3:0] = 4'b1011; dp_r = dp[2]; end
-            default: begin nib = digits[15:12]; an_l[3:0] = 4'b0111; dp_r = dp[3]; end
+            2'd0: begin nib = digits[3:0];   an_l = 4'b1110; dp_r = dp[0]; end
+            2'd1: begin nib = digits[7:4];   an_l = 4'b1101; dp_r = dp[1]; end
+            2'd2: begin nib = digits[11:8];  an_l = 4'b1011; dp_r = dp[2]; end
+            default: begin nib = digits[15:12]; an_l = 4'b0111; dp_r = dp[3]; end
         endcase
 
         case (nib)
@@ -91,6 +91,6 @@ module seg7_scan #(
     // 极性转换
     //------------------------------------------------------------------
     assign seg = SEG_ACT_LOW ? seg_l : ~seg_l;
-    assign an  = AN_ACT_LOW  ? an_l  : ~an_l;
+    assign an4 = AN_ACT_LOW  ? an_l  : ~an_l;
 
 endmodule

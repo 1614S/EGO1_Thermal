@@ -15,7 +15,8 @@ module ego1_thermal_top (
     input  wire [4:0]  btn,
     input  wire [7:0]  sw,
     output wire [15:0] led,
-    output wire [7:0]  seg,
+    output wire [7:0]  seg,          // 左 4 位（第 0 组）段选
+    output wire [7:0]  seg2,         // 右 4 位（第 1 组）段选
     output wire [7:0]  an,           // 低 4 位扫描，高 4 位恒灭
     output wire        uart_tx,
     input  wire        uart_rx,
@@ -445,7 +446,7 @@ module ego1_thermal_top (
         .th_warn_q8_8(th_warn),
         .th_hot_q8_8 (th_hot),
         .th_crit_q8_8(th_crit),
-        .clr_alarm   (btn[4]),
+        .clr_alarm   (1'b0),             // 清报警移到串口 R 命令；S4 改为切环境温度设定值
         .state       (state),
         .fan_max     (fan_max),
         .gear_low    (gear_low),
@@ -506,9 +507,18 @@ module ego1_thermal_top (
     //   安全：告警/超温/外部数据失效/时钟未锁定时强制 0，避免"故障反而猛加热"
     //------------------------------------------------------------------
     reg signed [15:0] setpoint_ext;
+    reg        [1:0]  se_idx;
     always @(posedge clk_sys or negedge rst_sys_n) begin
-        if (!rst_sys_n)                                          setpoint_ext <= 16'sd10240;  // 40.0 ℃
-        else if (cmd_wr_en && cmd_wr_addr == 6'h0E)              setpoint_ext <= cmd_wr_data[15:0];
+        if (!rst_sys_n) begin
+            setpoint_ext <= 16'sd10240;                          // 40.0 ℃
+            se_idx       <= 2'd0;
+        end else if (btn_pulse[4]) begin                         // S4：40 → 50 → 60 → 40
+            se_idx       <= (se_idx == 2'd2) ? 2'd0 : se_idx + 2'd1;
+            setpoint_ext <= (se_idx == 2'd0) ? `T_50_Q8_8 :
+                            (se_idx == 2'd1) ? `T_60_Q8_8 : `T_40_Q8_8;
+        end else if (cmd_wr_en && cmd_wr_addr == 6'h0E) begin
+            setpoint_ext <= cmd_wr_data[15:0];                   // SE= 命令优先
+        end
     end
 
     wire        heater_en = locked && (state != 2'd3) && (ext_age < 16'd100)
@@ -808,69 +818,86 @@ module ego1_thermal_top (
 
     reg [1:0] disp_page;
     always @(posedge clk_sys or negedge rst_sys_n) begin
-        if (!rst_sys_n)                 disp_page <= 2'd0;   // 默认 = 结温页
-        else if (pg_press)              disp_page <= disp_page + 2'd1;
+        if (!rst_sys_n)                 disp_page <= 2'd0;   // 默认第 1 页
+        else if (pg_press)              disp_page <= (disp_page == 2'd2) ? 2'd0 : disp_page + 2'd1;
     end
 
-    // 显示必须用"标定后的原始值"而不是重滤波值：MA8 的窗口是 8×100 ms = 800 ms，
-    // 用 tj_filt 显示会把"端到端延迟 ≤200 ms"直接击穿（docs/01 §2.4 本来也是这么定的）
-    wire signed [15:0] disp_val = (disp_page == 2'd1) ? $signed({1'b0, setpoint}) :
-                                  (disp_page == 2'd3) ? text_cal :
-                                  (disp_page == 2'd0) ? tj_cal   : 16'sd0;
-    wire [15:0] disp_abs = disp_val[15] ? (~disp_val + 16'd1) : disp_val;
-    // 注意位宽：disp_abs 是 Q8.8，×5 后 51.2 ℃(13107) 就会超过 16 位，
-    // 原来写成 16 位上下文会直接溢出归零（上板实测 >51 ℃ 显示翻回 00.0）。
-    wire [20:0] t01_w = disp_abs * 21'd5;            // 中间量扩到 21 位
-    wire [15:0] t01   = t01_w[19:7];                 // /128 → 0.1 ℃ 单位
-
-    // 十进制拆分：/10 ≈ ×205 >> 11，/100 ≈ ×2622 >> 18（避免常数除数位链）
-    //   2622/2^18 = 0.0100021（略大于 0.01），向下取整才对；
-    //   原来用 2621（0.0099988，略小），遇到整百（t01=500 → 4.999）会算成 4，
-    //   50.0 ℃ 就显示成 "4A.0"（上板实测）。
-    wire [27:0] d_mul10  = t01 * 11'd205;
-    wire [15:0] t_div10  = d_mul10[26:11];               // t01/10
-    wire [33:0] d_mul100 = t01 * 18'd2622;
-    wire [15:0] t_div100 = d_mul100[33:18];              // t01/100
-    wire [3:0]  d0 = (t01 - t_div10 * 16'd10);           // 个位（0.1 ℃）
-    wire [3:0]  d1 = (t_div10 - t_div100 * 16'd10);      // 十位（℃ 个位）
-    wire [3:0]  d2_raw = t_div100[3:0];
-    wire [3:0]  d2 = (d2_raw > 4'd9) ? (d2_raw - 4'd10) : d2_raw;
-
     //------------------------------------------------------------------
-    // 占空比页：duty 0…1000 直接显示 4 位十进制（不带小数点）
+    // 8 位数码管：左 4 位 = 结温/设定值/风扇占空比，右 4 位 = 传感器温度/设定值/加热占空比
+    //   第 1 页：实测结温 | 实测环境温度
+    //   第 2 页：结温设定值 | 环境温度设定值
+    //   第 3 页：风扇 PWM 占空比 | 加热 PWM 占空比
+    //
+    // 拆位全部用扩位中间量（踩过的坑：16 位上下文截断 → 51.2 ℃ 归零 / 占空比 A~F）
     //------------------------------------------------------------------
-    wire [15:0] du     = {5'd0, duty};
-    wire [3:0]  du_k   = (du >= 16'd1000) ? 4'd1 : 4'd0;          // 千位
-    wire [15:0] du_r   = du - (du_k ? 16'd1000 : 16'd0);
-    // 乘积必须先落到 22 位中间量：du_r ≤ 999，999×2622 = 2.6 M 需要 22 位，
-    // 直接写 `(du_r * 18'd2622) >> 18` 会被赋值的 16 位上下文截断，
-    // 拆位出现 10~15（数码管显示 A~F）——上板实测过。
-    wire [21:0] du_m100 = du_r * 18'd2622;
-    wire [21:0] du_m10  = du_r * 11'd205;
-    wire [15:0] du_100 = du_m100[21:18];                          // 百位
-    wire [15:0] du_10  = du_m10[21:11];                           // 十位
-    wire [15:0] du_t10 = du_10  - du_100 * 16'd10;
-    wire [15:0] du_o10 = du_r   - du_10  * 16'd10;
+    // 温度 Q8.8 → 4 位 BCD（左1 空白、左2 十位、左3 个位、左4 小数），小数点放位 2
+    function [15:0] to_tdisp(input signed [15:0] q);
+        reg [15:0] a, t10, d10, t100, e0, e1;
+        reg [33:0] m;
+        begin
+            a   = q[15] ? (~q + 16'd1) : q;
+            m   = a * 21'd5;            // 21 位中间量
+            t10 = m[19:7];              // 0.1 ℃
+            m   = t10 * 11'd205;  d10  = m[26:11];
+            m   = t10 * 18'd2622; t100 = m[33:18];
+            e0  = t10 - d10  * 16'd10;
+            e1  = d10 - t100 * 16'd10;
+            to_tdisp = { e0[3:0], e1[3:0], t100[3:0], 4'hF };
+        end
+    endfunction
 
-    // 实测确认：an[0] 在最左；小数点画在所选数字右侧
-    //   左1=digits[3:0]，左2=[7:4]，左3=[11:8]，左4=[15:12]
-    wire [3:0]  p_a = (disp_page == 2'd2) ? du_k       : 4'hF;
-    wire [3:0]  p_b = (disp_page == 2'd2) ? du_100[3:0] : d2;
-    wire [3:0]  p_c = (disp_page == 2'd2) ? du_t10[3:0] : d1;
-    wire [3:0]  p_d = (disp_page == 2'd2) ? du_o10[3:0] : d0;
+    // 占空比 0…1000 → 4 位 BCD（左1 千位、左2 百位、左3 十位、左4 个位），无小数点
+    function [15:0] to_ddisp(input [10:0] d);
+        reg [15:0] r, h, t, t10, o10;
+        reg [3:0]  k;
+        reg [21:0] m;
+        begin
+            k  = (d >= 11'd1000) ? 4'd1 : 4'd0;
+            r  = {5'd0, d} - (k ? 16'd1000 : 16'd0);
+            m  = r * 18'd2622; h   = m[21:18];
+            m  = r * 11'd205;  t   = m[21:11];
+            t10 = t - h * 16'd10;
+            o10 = r - t * 16'd10;
+            to_ddisp = { o10[3:0], t10[3:0], h[3:0], k };
+        end
+    endfunction
 
-    wire [15:0] seg_digits = sw[4] ? 16'h4321 : {p_d, p_c, p_b, p_a};
-    wire [3:0]  seg_dp     = sw[4] ? 4'b0001 :
-                             ((disp_page == 2'd2) ? 4'b0000 : 4'b0100);
+    wire [15:0] dig_l, dig_r;       // 左/右 4 位的 BCD
+    wire [3:0]  dp_l, dp_r;
 
-    seg7_scan #(.DIV(100000)) u_seg (
+    assign dig_l = sw[4] ? 16'h4321 :
+                   (disp_page == 2'd0) ? to_tdisp(tj_cal)      :
+                   (disp_page == 2'd1) ? to_tdisp(setpoint)    :
+                                         to_ddisp(duty);
+    assign dig_r = sw[4] ? 16'h4321 :
+                   (disp_page == 2'd0) ? to_tdisp(text_cal)    :
+                   (disp_page == 2'd1) ? to_tdisp(setpoint_ext):
+                                         to_ddisp(duty_ext);
+    assign dp_l  = sw[4] ? 4'b0001 : ((disp_page == 2'd2) ? 4'b0000 : 4'b0100);
+    assign dp_r  = sw[4] ? 4'b0001 : ((disp_page == 2'd2) ? 4'b0000 : 4'b0100);
+
+    wire [3:0] an_lo, an_hi;
+
+    seg7_scan #(.DIV(100000)) u_seg_lo (
         .clk   (clk_sys),
         .rst_n (rst_sys_n),
-        .digits(seg_digits),
-        .dp    (seg_dp),
+        .digits(dig_l),
+        .dp    (dp_l),
         .seg   (seg),
-        .an    (an)
+        .an4   (an_lo)
     );
+
+    seg7_scan #(.DIV(100000)) u_seg_hi (
+        .clk   (clk_sys),
+        .rst_n (rst_sys_n),
+        .digits(dig_r),
+        .dp    (dp_r),
+        .seg   (seg2),
+        .an4   (an_hi)
+    );
+
+    // an[3:0] = 第 0 组（左 4 位），an[7:4] = 第 1 组（右 4 位）
+    assign an = {an_hi, an_lo};
 
     reg [23:0] heart;
     always @(posedge clk_sys or negedge rst_sys_n) begin
