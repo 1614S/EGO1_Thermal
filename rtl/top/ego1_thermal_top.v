@@ -423,7 +423,9 @@ module ego1_thermal_top (
     wire [10:0] duty_pi;
     wire        pi_sat;
 
-    pi_ctrl u_pi (
+    // 结温环沿用饱和-PI 混合算法：饱和区（|e|>2 K）靠积分分离把积分冻结，
+    // 否则 100 % 期间积分会一直累积，切回 PI 时要很久才能退饱和。
+    pi_ctrl #(.E_ILIM(512)) u_pi (
         .clk      (clk_sys),
         .rst_n    (rst_sys_n),
         .update   (sample_valid),
@@ -474,8 +476,47 @@ module ego1_thermal_top (
         .n_up     (n_up)
     );
 
+    //------------------------------------------------------------------
+    // 结温环：饱和逼近 + PI 精细调控（阈值 2 ℃，迟滞 3 ℃）
+    //   e = Tj − Tset，e>0 过热 → 100 %；e<0 过冷 → 0 %
+    //   与加热环同一套思路：
+    //     · |e| ≤ 2 K        → PI 精细调节
+    //     · |e| > 3 K        → 饱和
+    //     · 2 K < |e| ≤ 3 K  → 保持原模式（迟滞，防止在边界反复切换）
+    //   输出经斜率限制（100 duty/100 ms，满量程 1 s），切换时风扇不会突变。
+    //------------------------------------------------------------------
+    wire signed [16:0] fan_err  = $signed(tj_filt) - $signed({1'b0, setpoint});
+    wire signed [16:0] fan_aerr = fan_err[16] ? (17'sd0 - fan_err) : fan_err;
+
+    reg fan_bang;
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n)        fan_bang <= 1'b1;                 // 上电先饱和逼近
+        else if (sample_valid) begin
+            // 迟滞方向：误差**缩小**到 2 K 才退出饱和；涨过 3 K 才回到饱和。
+            //   （反过来的话：退出阈值 3 K > 回退阈值 2 K，误差停在 2~3 K 会反复切换）
+            if (fan_bang) fan_bang <= (fan_aerr > 17'sd512);     // 进入 2 K → 交给 PI
+            else          fan_bang <= (fan_aerr > 17'sd768);     // 涨过 3 K → 回饱和
+        end
+    end
+
+    wire [10:0] fan_target = fan_bang ? (fan_err[16] ? 11'd0 : 11'd1000) : duty_pi;
+
+    reg [10:0] fan_duty_hy;
+    wire [11:0] fan_tgt12 = {1'b0, fan_target};
+    wire [11:0] fan_up12  = {1'b0, fan_duty_hy} + 12'd100;
+    wire [11:0] fan_dn12  = ({1'b0, fan_duty_hy} > 12'd100) ?
+                            ({1'b0, fan_duty_hy} - 12'd100) : 12'd0;
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n)        fan_duty_hy <= 11'd0;
+        else if (sample_valid) begin
+            if      (fan_tgt12 > fan_up12) fan_duty_hy <= fan_up12[10:0];
+            else if (fan_tgt12 < fan_dn12) fan_duty_hy <= fan_dn12[10:0];
+            else                           fan_duty_hy <= fan_target;
+        end
+    end
+
     assign duty = fan_max ? 11'd1000 :
-                  (control[1] ? duty_man : duty_pi);
+                  (control[1] ? duty_man : fan_duty_hy);
 
     // 执行器线性化：PI 的 0…1000 映射到风扇的 6%…100%，跳过 0–6% 的死区。
     // 不这么做，PI 输出落在 0…60 时风扇不转，闭环会出现一个"不可控空档"。
@@ -538,6 +579,7 @@ module ego1_thermal_top (
     wire        heater_en = locked && (state != 2'd3) && (ext_age < 16'd100)
                             && (text_filt < 16'sd19200);       // < 75 ℃ 才允许加热
     wire [10:0] duty_ext;
+    wire        ext_bang;        // 1 = 加热环处于饱和区（输出 0/100 %）
     wire        ext_sat;
 
     ext_loop u_ext (
@@ -547,10 +589,15 @@ module ego1_thermal_top (
         .t_ext    (text_filt),
         .t_room   (16'sd6400),       // 室温参考 25.0 ℃（前馈基准；未单独测室温时的保守假设）
         .sp_ext   (setpoint_ext),
-        .kp_q8_8  (16'd512),         // Kp = 2.0 duty/℃（对象增益仅 0.25 K/duty，不能大）
-        .ki_q8_8  (16'd5),           // Ki = 0.02 duty/(℃·样本)；配合积分分离(2 K)防超调
+        // 2026-11-22 二次整定：实测热耦合远差于仿真，原 Kp=2 / Ki=0.02 太软，
+        //   SE=40 时占空比长期停在 20 % 多、稳态掉到 36~37 ℃。
+        //   改为激进 PI：Kp=16 duty/℃、Ki=2.0 duty/(℃·样本)（≈ 20 duty/s per K），
+        //   配合积分分离(2 K)与 3 K 饱和区，既快又不会在饱和区积爆。
+        .kp_q8_8  (16'd4096),        // Kp = 16 duty/℃
+        .ki_q8_8  (16'd512),         // Ki = 2.0 duty/(℃·样本)
         .heater_en(heater_en),
         .duty     (duty_ext),
+        .bang     (ext_bang),
         .saturated(ext_sat)
     );
 
@@ -727,6 +774,7 @@ module ego1_thermal_top (
         .text_f   (text_filt),
         .cal_a    (cal_a),
         .cal_b    (cal_b),
+        .switch_max  (switch_max_us),
         .ext_err_cnt (ext_err_cnt),
         .ext_crc_cnt (ext_crc_cnt),
         .n_cmd    (cmd_n_cmd),

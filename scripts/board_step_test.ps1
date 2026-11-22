@@ -13,6 +13,8 @@ param(
     [double]$StepTo = 60.0,
     [int]$PreSeconds = 20,
     [int]$PostSeconds = 70,
+    [ValidateSet("tj", "text")]
+    [string]$Target = "tj",       # tj=改结温设定值(S=)，text=改传感器设定值(SE=)
     [string]$Csv = "results\board_step.csv"
 )
 
@@ -92,9 +94,11 @@ function Pump([int]$ms) {
 
 Pump ($PreSeconds * 1000)
 # 发命令
-$cmd = "S={0:F1}`r" -f $StepTo
+if ($Target -eq "text") { $cmd = "SE={0:F1}`r" -f $StepTo }
+else                     { $cmd = "S={0:F1}`r"  -f $StepTo }
 $sp.Write($cmd)
-Write-Host ("已发送命令 {0}，继续采 {1} 秒..." -f ($cmd.Trim()), $PostSeconds)
+$tgtName = if ($Target -eq "text") { "传感器设定值" } else { "结温设定值" }
+Write-Host ("已发送命令 {0}（{1}），继续采 {2} 秒..." -f ($cmd.Trim()), $tgtName, $PostSeconds)
 $stepT = $sw.Elapsed.TotalSeconds
 Pump ($PostSeconds * 1000)
 $sp.Close()
@@ -107,21 +111,27 @@ $rows | Add-Content $Csv -Encoding utf8
 # ---- 指标 ----
 $pre = $frames | Where-Object { $_.T -lt $stepT }
 $post = $frames | Where-Object { $_.T -ge $stepT }
-$t0 = ($pre | Measure-Object tj -Average).Average
-$tmax = ($post | Measure-Object tj -Maximum).Maximum
-$tend = ($post | Select-Object -Last 20 | Measure-Object tj -Average).Average
-$ov = if ($StepTo -gt $t0) { ($tmax - $StepTo) / ($StepTo - $t0) * 100 } else { 0 }
+# 指标在"所选通道"上算：tj=结温列，text=环境传感器列
+$colName = if ($Target -eq "text") { "text" } else { "tj" }
+$preV  = $pre  | ForEach-Object { $_.$colName }
+$postV = $post | ForEach-Object { $_.$colName }
+$t0   = ($preV  | Measure-Object -Average).Average
+$tmax = ($postV | Measure-Object -Maximum).Maximum
+$tend = ($postV | Select-Object -Last 20 | Measure-Object -Average).Average
+$ov = if ($StepTo -gt $t0) { [Math]::Max(0.0, ($tmax - $StepTo) / ($StepTo - $t0) * 100) } else { 0 }
 $band = 0.5
 $settle = $null
 for ($i = 0; $i -lt $post.Count; $i++) {
     $rem = $post[$i..($post.Count - 1)]
-    if ((($rem | ForEach-Object { [Math]::Abs($_.tj - $StepTo) } | Measure-Object -Maximum).Maximum) -lt $band) {
+    if ((($rem | ForEach-Object { [Math]::Abs($_.$colName - $StepTo) } | Measure-Object -Maximum).Maximum) -lt $band) {
         $settle = $rem[0].T - $stepT; break
     }
 }
 
 Write-Host ""
 Write-Host "==== 阶跃测试结果 ===="
+$chanName = if ($Target -eq "text") { "环境传感器 AM2302" } else { "结温 XADC" }
+Write-Host ("测试通道    : {0}   命令 {1}" -f $chanName, $cmd.Trim())
 Write-Host ("设定值      : {0:F1} ℃（从 {1:F1} ℃ 起跳）" -f $StepTo, $t0)
 Write-Host ("峰值        : {0:F2} ℃   超调 {1:F1} %" -f $tmax, $ov)
 Write-Host ("末段稳态    : {0:F2} ℃   稳态误差 {1:F2} ℃" -f $tend, ($tend - $StepTo))
