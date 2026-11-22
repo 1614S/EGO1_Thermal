@@ -589,8 +589,12 @@ module ego1_thermal_top (
         .t_ext    (text_filt),
         .t_room   (16'sd6400),       // 室温参考 25.0 ℃（前馈基准；未单独测室温时的保守假设）
         .sp_ext   (setpoint_ext),
-        .kp_q8_8  (16'd512),         // Kp = 2.0 duty/℃（对象增益仅 0.25 K/duty，不能大）
-        .ki_q8_8  (16'd5),           // Ki = 0.02 duty/(℃·样本)；配合积分分离(2 K)防超调
+        // 2026-11-22 二次整定：实测热耦合远差于仿真，原 Kp=2 / Ki=0.02 太软，
+        //   SE=40 时占空比长期停在 20 % 多、稳态掉到 36~37 ℃。
+        //   改为激进 PI：Kp=16 duty/℃、Ki=2.0 duty/(℃·样本)（≈ 20 duty/s per K），
+        //   配合积分分离(2 K)与 3 K 饱和区，既快又不会在饱和区积爆。
+        .kp_q8_8  (16'd4096),        // Kp = 16 duty/℃
+        .ki_q8_8  (16'd512),         // Ki = 2.0 duty/(℃·样本)
         .heater_en(heater_en),
         .duty     (duty_ext),
         .bang     (ext_bang),

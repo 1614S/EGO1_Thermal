@@ -20,7 +20,9 @@
 //======================================================================
 module ext_loop #(
     // 前馈增益：duty_ff = (Tset − T_room)[Q8.8] × KFF_NUM / 256
-    parameter integer KFF_NUM  = 15,      // 15 duty/K（实测 θ_eff≈26.7 K/W、Pmax=2.5 W）
+    parameter integer KFF_NUM  = 22,      // 25 duty/K（2026-11-22 二次标定：实测耦合远差于
+                                          //   首次标定的 θ_eff≈26.7 K/W，SE=40 时 15 duty/K
+                                          //   只给 22.5 %，稳态掉到 36~37 ℃ 撑不住）
     parameter integer BAND_Q88 = 768,     // 3.0 K：进入 PI 区
     parameter integer HYST_Q88 = 1024,    // 4.0 K：退回饱和区
     parameter integer SLEW     = 40       // 每 100 ms 最多变化 40 duty（0→1000 约 2.5 s）
@@ -45,8 +47,26 @@ module ext_loop #(
     //   用它做前馈会得到 0，稳态只能靠积分硬撑（超调大、易饱和）。
     //------------------------------------------------------------------
     wire signed [16:0] dt    = $signed({1'b0, sp_ext}) - $signed({1'b0, t_room});
-    wire signed [20:0] ff_m  = dt * KFF_NUM;
-    wire signed [16:0] ff_s  = (dt > 17'sd0) ? (ff_m >>> 8) : 17'sd0;
+
+    // 两级流水：dt 先打一拍，再做乘法。
+    //   原因：KFF_NUM 从 15 加到 25 后，"减法→乘法→移位→限幅"这条组合链
+    //   单拍走不完（WNS −0.535 ns，14 个端点失败）。PI 每 100 ms 才更新，
+    //   多两拍延迟完全无影响。
+    reg signed [16:0] dt_r;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) dt_r <= 17'sd0;
+        else        dt_r <= dt;
+    end
+
+    // 乘法结果也寄存一拍：真正的长路径是"乘法 + 移位 + 限幅"，
+    //   只把 dt 打拍不够（WNS 仍不收敛）
+    reg signed [20:0] ff_m_r;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) ff_m_r <= 21'sd0;
+        else        ff_m_r <= dt_r * KFF_NUM;
+    end
+
+    wire signed [16:0] ff_s  = (dt_r > 17'sd0) ? (ff_m_r >>> 8) : 17'sd0;
     wire        [10:0] ff_d  = (ff_s > 17'sd1000) ? 11'd1000 : ff_s[10:0];
 
     // 打一拍：减法 + 限幅 + PI 的 32 位加法原来挤在同一拍里（19 级 / 15 个 CARRY4，
@@ -61,7 +81,9 @@ module ext_loop #(
     // PI（复用结温环的模块；积分分离阈值 2 K，避免饱和区积分饱和）
     //------------------------------------------------------------------
     wire [10:0] duty_pi;
-    pi_ctrl #(.INVERT_ERROR(1), .SP_RAMP(64), .E_ILIM(512)) u_pi_ext (
+    // E_ILIM = 3 K：与饱和区边界对齐。原来取 2 K 时，误差 2~3 K 的区间里
+    // 积分被冻结、Kp 只能扣 32 duty，前馈偏大就卡住不动（实测卡在 42.2 ℃ / 34 %）。
+    pi_ctrl #(.INVERT_ERROR(1), .SP_RAMP(64), .E_ILIM(768)) u_pi_ext (
         .clk      (clk),
         .rst_n    (rst_n),
         .update   (update),
@@ -93,9 +115,25 @@ module ext_loop #(
         end
     end
 
-    // 目标占空比：饱和区 = 0/1000；PI 区 = PI 输出
+    //------------------------------------------------------------------
+    // 过温快速回调（2026-11-22 第三次整定）
+    //   问题：装置热滞后大，PI 在接近设定点时仍输出前馈的 30 % 多，
+    //         温度会一路越过 40 ℃ 停在 42 ℃（实测）。
+    //   对策：一旦越过设定点就立刻大幅减功率（分级，避免噪声抖动）：
+    //        过温 > 1.0 K  → 0 %
+    //        0.5~1.0 K    → PI 的 25 %
+    //        0~0.5 K      → PI 的 50 %
+    //   低于设定点时仍走正常 PI（前馈 + Kp + 积分），保证升温够快。
+    //------------------------------------------------------------------
+    wire signed [16:0] over   = (err < 17'sd0) ? (17'sd0 - err) : 17'sd0;  // 过温量
+    wire        [10:0] pi_adj = (over > 17'sd256) ? 11'd0        :   // >1.0 K
+                                (over > 17'sd128) ? (duty_pi >> 2) : // 0.5~1.0 K
+                                (over > 17'sd0)   ? (duty_pi >> 1) : // 0~0.5 K
+                                                    duty_pi;
+
+    // 目标占空比：饱和区 = 0/1000；PI 区 = 过温回调后的 PI 输出
     wire [10:0] target = (!heater_en) ? 11'd0 :
-                         bang ? (err[16] ? 11'd0 : 11'd1000) : duty_pi;
+                         bang ? (err[16] ? 11'd0 : 11'd1000) : pi_adj;
 
     //------------------------------------------------------------------
     // 斜率限制：保证饱和区↔PI 区切换时没有阶跃（无扰切换）
