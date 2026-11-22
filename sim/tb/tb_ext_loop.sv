@@ -41,8 +41,11 @@ module tb_ext_loop;
     // ---------------- 一阶热模型 ----------------
     real t_amb   = 25.0;                    // ℃
     real p_max   = 2.5;                     // W（5 V / 10 Ω）
-    real rth     = 100.0;                   // K/W
-    real cth     = 1.0;                     // J/K
+    // 2026-11-22 实测标定（results/heat_no_mos.csv，5 V 常通 2.5 W）：
+    //   AM2302 23.0 → 48.2 ℃（10 min），指数外推稳态 89.9 ℃ → θ_eff = 26.7 K/W
+    //   热容取 4 J/K，使 τ = 107 s（真实装置 τ≈1150 s，仿真里等比压缩）
+    real rth     = 26.7;                    // K/W（实测）
+    real cth     = 4.0;                     // J/K → τ = 107 s
     real dt      = 0.1;                     // 每个 update 推进 0.1 s
 
     integer cycle = 0;
@@ -94,10 +97,11 @@ module tb_ext_loop;
         repeat(10) @(posedge clk);
         rst_n = 1;
         repeat(20) @(posedge clk);
-        $display("=== 环境温度闭环（前馈 + PI + 积分分离，对象 τ=100 s, θ=100 K/W, Pmax=2.5 W）===");
-        step(40.0, 3000);      // 300 s 物理时间
-        step(50.0, 3000);
-        step(60.0, 3000);
+        $display("=== 环境温度闭环（前馈 + PI + 积分分离；对象 τ=107 s, θ=26.7 K/W 实测标定, Pmax=2.5 W）===");
+        // 每档给 600 s ≈ 5.6τ，保证真的收敛到稳态再判误差
+        step(40.0, 6000);
+        step(50.0, 6000);
+        step(60.0, 6000);
         if (fails == 0) $display("==== tb_ext_loop : PASS (fails=0) ====");
         else            $display("==== tb_ext_loop : FAIL (fails=%0d) ====", fails);
         $display("=== 完成 ===");

@@ -548,7 +548,7 @@ module ego1_thermal_top (
         .t_room   (16'sd6400),       // 室温参考 25.0 ℃（前馈基准；未单独测室温时的保守假设）
         .sp_ext   (setpoint_ext),
         .kp_q8_8  (16'd512),         // Kp = 2.0 duty/℃（对象增益仅 0.25 K/duty，不能大）
-        .ki_q8_8  (16'd3),           // Ki = 0.01 duty/(℃·样本)；配合积分分离(1 K)防超调
+        .ki_q8_8  (16'd5),           // Ki = 0.02 duty/(℃·样本)；配合积分分离(2 K)防超调
         .heater_en(heater_en),
         .duty     (duty_ext),
         .saturated(ext_sat)

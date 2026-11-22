@@ -3,14 +3,24 @@
 // ext_loop.v —— 环境温度（AM2302）闭环：前馈 + PI + 安全门控
 //
 // 与结温环（pi_ctrl）同款结构，但对象是"加热电阻"：
-//   P = V²/R × duty，温度对占空比近似一阶线性 → 稳态 duty ≈ k_ff × (Tset − Tamb)
-//   前馈取 k_ff = 4 duty/K（按 10 Ω/5 W、5 V 供电、装置 θ≈100 K/W 估：
-//   ΔT=35 K 需 0.35 W ≈ 14 % 占空比），PI 只修残差。
+//   P = V²/R × duty，温度对占空比近似一阶线性 → 稳态 duty ≈ k_ff × (Tset − T_room)
+//
+//   k_ff 标定（2026-11-22 实测 results/heat_no_mos.csv，5 V/10 Ω 常通 = 2.5 W）：
+//       AM2302 从 23.0 ℃ 升到 48.2 ℃（+25.2 K/10 min），指数拟合稳态外推 89.9 ℃
+//       → θ_eff = (89.9−23.0)/2.5 W = 26.7 K/W
+//       → k_ff = 1000/(θ_eff × Pmax) = 1000/(26.7×2.5) = 15 duty/K
+//   取 16 duty/K（>>4）近似 15，误差 +6 %，由 PI 的积分项吃掉。
+//   原来按 θ≈100 K/W 取的 4 duty/K 比实际小 3.7 倍，PI 要额外积 3 倍多的量，慢且易饱和。
 //
 // 安全：heater_en=0 时输出强制 0（告警/超温/传感器失效/时钟未锁定），
 //       绝不能像风扇那样"故障反而拉满"。
 //======================================================================
-module ext_loop (
+module ext_loop #(
+    // 前馈增益：duty_ff = (Tset − T_room)[Q8.8] × KFF_NUM / 256
+    //   KFF_NUM=15 → 15 duty/K（实测装置 θ_eff≈26.7 K/W、Pmax=2.5 W，1000/(26.7×2.5)=15.0）
+    //   KFF_NUM=4  →  4 duty/K（仿真里 θ=100 K/W 的对象用这个）
+    parameter integer KFF_NUM = 15
+) (
     input  wire               clk,
     input  wire               rst_n,
     input  wire               update,        // 100 ms 单拍
@@ -32,7 +42,11 @@ module ext_loop (
     //   Q8.8 下 1 K = 256 LSB，×4/256 = >>6
     //------------------------------------------------------------------
     wire signed [16:0] dt    = $signed({1'b0, sp_ext}) - $signed({1'b0, t_room});
-    wire signed [16:0] ff_s  = (dt > 17'sd0) ? (dt >>> 6) : 17'sd0;
+    // Q8.8 下 1 K = 256 LSB → duty_ff = dt × KFF_NUM / 256
+    //   用乘法而不是移位，才能精确取 15 duty/K（>>4 是 16，偏高 6.7 %，
+    //   在 θ_eff 实测值上有 1 K 级的稳态偏差，积分要积很久才拉回来）
+    wire signed [20:0] ff_m  = dt * KFF_NUM;
+    wire signed [16:0] ff_s  = (dt > 17'sd0) ? (ff_m >>> 8) : 17'sd0;
     wire        [10:0] ff_d  = (ff_s > 17'sd1000) ? 11'd1000 : ff_s[10:0];
 
     // 打一拍：减法 + 限幅 + PI 的 32 位加法原来挤在同一拍里（19 级 / 15 个 CARRY4，
@@ -47,7 +61,7 @@ module ext_loop (
     // PI（复用结温环的模块，参数由外部给）
     //------------------------------------------------------------------
     wire [10:0] duty_pi;
-    pi_ctrl #(.INVERT_ERROR(1), .SP_RAMP(64), .E_ILIM(256)) u_pi_ext (
+    pi_ctrl #(.INVERT_ERROR(1), .SP_RAMP(64), .E_ILIM(512)) u_pi_ext (
         .clk      (clk),
         .rst_n    (rst_n),
         .update   (update),
