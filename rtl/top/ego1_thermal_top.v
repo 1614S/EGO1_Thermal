@@ -423,7 +423,9 @@ module ego1_thermal_top (
     wire [10:0] duty_pi;
     wire        pi_sat;
 
-    pi_ctrl u_pi (
+    // 结温环沿用饱和-PI 混合算法：饱和区（|e|>2 K）靠积分分离把积分冻结，
+    // 否则 100 % 期间积分会一直累积，切回 PI 时要很久才能退饱和。
+    pi_ctrl #(.E_ILIM(512)) u_pi (
         .clk      (clk_sys),
         .rst_n    (rst_sys_n),
         .update   (sample_valid),
@@ -474,8 +476,47 @@ module ego1_thermal_top (
         .n_up     (n_up)
     );
 
+    //------------------------------------------------------------------
+    // 结温环：饱和逼近 + PI 精细调控（阈值 2 ℃，迟滞 3 ℃）
+    //   e = Tj − Tset，e>0 过热 → 100 %；e<0 过冷 → 0 %
+    //   与加热环同一套思路：
+    //     · |e| ≤ 2 K        → PI 精细调节
+    //     · |e| > 3 K        → 饱和
+    //     · 2 K < |e| ≤ 3 K  → 保持原模式（迟滞，防止在边界反复切换）
+    //   输出经斜率限制（100 duty/100 ms，满量程 1 s），切换时风扇不会突变。
+    //------------------------------------------------------------------
+    wire signed [16:0] fan_err  = $signed(tj_filt) - $signed({1'b0, setpoint});
+    wire signed [16:0] fan_aerr = fan_err[16] ? (17'sd0 - fan_err) : fan_err;
+
+    reg fan_bang;
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n)        fan_bang <= 1'b1;                 // 上电先饱和逼近
+        else if (sample_valid) begin
+            // 迟滞方向：误差**缩小**到 2 K 才退出饱和；涨过 3 K 才回到饱和。
+            //   （反过来的话：退出阈值 3 K > 回退阈值 2 K，误差停在 2~3 K 会反复切换）
+            if (fan_bang) fan_bang <= (fan_aerr > 17'sd512);     // 进入 2 K → 交给 PI
+            else          fan_bang <= (fan_aerr > 17'sd768);     // 涨过 3 K → 回饱和
+        end
+    end
+
+    wire [10:0] fan_target = fan_bang ? (fan_err[16] ? 11'd0 : 11'd1000) : duty_pi;
+
+    reg [10:0] fan_duty_hy;
+    wire [11:0] fan_tgt12 = {1'b0, fan_target};
+    wire [11:0] fan_up12  = {1'b0, fan_duty_hy} + 12'd100;
+    wire [11:0] fan_dn12  = ({1'b0, fan_duty_hy} > 12'd100) ?
+                            ({1'b0, fan_duty_hy} - 12'd100) : 12'd0;
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n)        fan_duty_hy <= 11'd0;
+        else if (sample_valid) begin
+            if      (fan_tgt12 > fan_up12) fan_duty_hy <= fan_up12[10:0];
+            else if (fan_tgt12 < fan_dn12) fan_duty_hy <= fan_dn12[10:0];
+            else                           fan_duty_hy <= fan_target;
+        end
+    end
+
     assign duty = fan_max ? 11'd1000 :
-                  (control[1] ? duty_man : duty_pi);
+                  (control[1] ? duty_man : fan_duty_hy);
 
     // 执行器线性化：PI 的 0…1000 映射到风扇的 6%…100%，跳过 0–6% 的死区。
     // 不这么做，PI 输出落在 0…60 时风扇不转，闭环会出现一个"不可控空档"。
