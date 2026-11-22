@@ -15,7 +15,8 @@ module tb_top_smoke;
 
     wire [15:0] led;
     wire [7:0]  seg;
-    wire [3:0]  an;
+    wire [7:0]  an;
+    wire [7:0]  seg2;
     wire        uart_tx;
     wire        fan_pwm;
     wire        dht_dq;
@@ -32,11 +33,12 @@ module tb_top_smoke;
         .sw      (sw),
         .led     (led),
         .seg     (seg),
+        .seg2    (seg2),
         .an      (an),
         .uart_tx (uart_tx),
         .uart_rx (1'b1),
         .fan_pwm (fan_pwm),
-        .fan_tach(1'b1),
+       
         .dht_dq  (dht_dq)
     );
 
@@ -156,13 +158,13 @@ module tb_top_smoke;
         begin : lat_measure
             integer cyc;
             reg [15:0] t01_old;
-            t01_old = u_dut.t01;
+            t01_old = u_dut.dig_l;
             `ifdef SIM_MODEL
             u_dut.u_xadc_fe.u_xadc.tj_c = 55.0;      // 45 → 55 ℃
             `endif
             for (cyc = 0; cyc < 400000; cyc = cyc + 1) begin
                 @(posedge clk);
-                if (u_dut.t01 != t01_old) begin
+                if (u_dut.dig_l != t01_old) begin
                     lat_ns = cyc * 10;               // 100 MHz
                     disable lat_measure;
                 end

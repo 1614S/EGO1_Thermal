@@ -3,7 +3,8 @@
 // cmd_proc.v —— ASCII 命令通道（115200，PuTTY 直接敲）
 //
 // 命令（大小写不敏感，CR 或 LF 结尾）：
-//   ?          状态行：T=45.0 S=50.0 D=0204 G=3 ST=0（duty 固定 4 位，满量程 1000）
+//   ?          状态行：T=45.0 A=25.0 S=50.0 D=0204 G=3 ST=0
+//              （T=结温、A=AM2302 环境温度、duty 固定 4 位满量程 1000）
 //   S=50.0     设目标温度（℃）
 //   KP=200     设 Kp（duty/℃，可带小数）
 //   KI=1.0     设 Ki（duty/(℃·样本)）
@@ -38,12 +39,17 @@ module cmd_proc (
     output reg  [31:0]        wr_data,
     input  wire signed [15:0] tj_f,
     input  wire        [15:0] setpoint,
+    input  wire signed [15:0] tset_ext,        // 环境温度设定值（SE=）
     input  wire        [10:0] duty,
+    input  wire        [10:0] duty_heat,       // 环境加热 PWM 占空比，用于 ? 状态行的 H= 字段
     input  wire        [2:0]  gear,
     input  wire        [1:0]  state,
     input  wire signed [15:0] tj_raw,
+    input  wire signed [15:0] text_f,           // AM2302 环境温度（Q8.8），用于 ? 状态行的 A= 字段
     input  wire        [15:0] cal_a,
     input  wire signed [15:0] cal_b,
+    input  wire        [15:0] ext_err_cnt,      // AM2302 总错误数
+    input  wire        [15:0] ext_crc_cnt,      // AM2302 校验错数
     output reg         [15:0] n_cmd,
     output reg         [15:0] n_err,
     output reg         [15:0] n_cal
@@ -53,12 +59,12 @@ module cmd_proc (
 
     localparam [3:0] C_Q = 4'd0, C_Z = 4'd1, C_R = 4'd2, C_S = 4'd3,
                      C_KP = 4'd4, C_KI = 4'd5, C_RT = 4'd6,
-                     C_CA = 4'd7, C_CB = 4'd8, C_BAD = 4'd15;
+                     C_CA = 4'd7, C_CB = 4'd8, C_SE = 4'd9, C_BAD = 4'd15;
 
     reg [2:0]  st;
     reg [7:0]  lbuf [0:23];
     reg [4:0]  blen;
-    reg [7:0]  rbuf [0:39];
+    reg [7:0]  rbuf [0:55];
     reg [5:0]  rlen, ridx;
     reg [3:0]  code;
     reg [4:0]  nstart, nk;
@@ -79,16 +85,19 @@ module cmd_proc (
     // 回复格式化的中间量（不能在表达式上直接取位，Verilog 会报语法错）
     reg [15:0] f_d100, f_d10, f_x1, f_x0;
     // '?' 状态行的格式化结果（分两拍算出来，再在 S_ACT 里只做拼接）
-    reg [15:0] t_tj10, t_sp10, t_du10;
-    reg        t_tjneg;
+    reg [15:0] t_tj10, t_sp10, t_du10, t_ex10, t_ht10, t_se10;
+    reg        t_tjneg, t_exneg;
     reg  [3:0] tj_d2, tj_d1, tj_d0, sp_d2, sp_d1, sp_d0, du_d3, du_d2, du_d1, du_d0;
+    reg  [3:0] ex_d2, ex_d1, ex_d0;
+    reg  [3:0] ht_d3, ht_d2, ht_d1, ht_d0;
+    reg  [3:0] se_d2, se_d1, se_d0;
 
     //------------------------------------------------------------------
     // 回复构造
     //------------------------------------------------------------------
     task putc(input [7:0] c);
         begin
-            if (rlen < 6'd38) begin
+            if (rlen < 6'd54) begin
                 rbuf[rlen] = c;
                 rlen = rlen + 6'd1;
             end
@@ -240,6 +249,8 @@ module cmd_proc (
                         code <= C_RT; nstart <= 5'd3; st <= S_NUM;
                     end else if (lbuf[0] == 8'h52 && blen == 5'd1) begin
                         code <= C_R;  st <= S_ACT;
+                    end else if (lbuf[0] == 8'h53 && lbuf[1] == 8'h45 && lbuf[2] == 8'h3D) begin
+                        code <= C_SE; nstart <= 5'd3; st <= S_NUM;   // SE=xx.x 环境目标温度
                     end else if (lbuf[0] == 8'h53 && lbuf[1] == 8'h3D) begin
                         code <= C_S;  nstart <= 5'd2; st <= S_NUM;
                     end else if (lbuf[0] == 8'h4B && lbuf[1] == 8'h50 && lbuf[2] == 8'h3D) begin
@@ -286,6 +297,12 @@ module cmd_proc (
                     t_sp10  <= setpoint[15] ? (((~setpoint + 16'd1) * 21'd5) >> 7)
                                             : ((setpoint * 21'd5) >> 7);
                     t_du10  <= {5'd0, duty};
+                    t_ht10  <= {5'd0, duty_heat};
+                    t_se10  <= tset_ext[15] ? (((~tset_ext + 16'd1) * 21'd5) >> 7)
+                                            : ((tset_ext * 21'd5) >> 7);
+                    t_exneg <= text_f[15];
+                    t_ex10  <= text_f[15] ? (((~text_f + 16'd1) * 21'd5) >> 7)
+                                          : ((text_f * 21'd5) >> 7);
                     st      <= S_FMT2;
                 end
 
@@ -301,6 +318,11 @@ module cmd_proc (
                     f_x0   = t_sp10 - f_d10 * 16'd10;
                     sp_d2 <= f_d100[3:0]; sp_d1 <= f_x1[3:0]; sp_d0 <= f_x0[3:0];
 
+                    f_d100 = div100(t_ex10); f_d10 = div10(t_ex10);
+                    f_x1   = f_d10 - f_d100 * 16'd10;
+                    f_x0   = t_ex10 - f_d10 * 16'd10;
+                    ex_d2 <= f_d100[3:0]; ex_d1 <= f_x1[3:0]; ex_d0 <= f_x0[3:0];
+
                     f_d100 = div100(t_du10); f_d10 = div10(t_du10);
                     f_x1   = f_d10 - f_d100 * 16'd10;
                     f_x0   = t_du10 - f_d10 * 16'd10;
@@ -308,6 +330,18 @@ module cmd_proc (
                     du_d3 <= (t_du10 >= 16'd1000) ? 4'd1 : 4'd0;
                     du_d2 <= f_d100[3:0] - ((t_du10 >= 16'd1000) ? 4'd10 : 4'd0);
                     du_d1 <= f_x1[3:0]; du_d0 <= f_x0[3:0];
+
+                    f_d100 = div100(t_ht10); f_d10 = div10(t_ht10);
+                    f_x1   = f_d10 - f_d100 * 16'd10;
+                    f_x0   = t_ht10 - f_d10 * 16'd10;
+                    ht_d3 <= (t_ht10 >= 16'd1000) ? 4'd1 : 4'd0;
+                    ht_d2 <= f_d100[3:0] - ((t_ht10 >= 16'd1000) ? 4'd10 : 4'd0);
+                    ht_d1 <= f_x1[3:0]; ht_d0 <= f_x0[3:0];
+
+                    f_d100 = div100(t_se10); f_d10 = div10(t_se10);
+                    f_x1   = f_d10 - f_d100 * 16'd10;
+                    f_x0   = t_se10 - f_d10 * 16'd10;
+                    se_d2 <= f_d100[3:0]; se_d1 <= f_x1[3:0]; se_d0 <= f_x0[3:0];
 
                     st <= S_ACT;
                 end
@@ -320,12 +354,24 @@ module cmd_proc (
                             if (t_tjneg) putc(8'h2D);
                             putc(8'h30 + {4'd0, tj_d2}); putc(8'h30 + {4'd0, tj_d1});
                             putc(8'h2E); putc(8'h30 + {4'd0, tj_d0});
+                            // 环境温度（AM2302），放在结温和设定值之间
+                            putc(8'h20); putc(8'h41); putc(8'h3D);
+                            if (t_exneg) putc(8'h2D);
+                            putc(8'h30 + {4'd0, ex_d2}); putc(8'h30 + {4'd0, ex_d1});
+                            putc(8'h2E); putc(8'h30 + {4'd0, ex_d0});
                             putc(8'h20); putc(8'h53); putc(8'h3D);
                             putc(8'h30 + {4'd0, sp_d2}); putc(8'h30 + {4'd0, sp_d1});
                             putc(8'h2E); putc(8'h30 + {4'd0, sp_d0});
+                            // 环境温度设定值 SE=xx.x（与命令 SE= 同名）
+                            putc(8'h20); putc(8'h53); putc(8'h45); putc(8'h3D);
+                            putc(8'h30 + {4'd0, se_d2}); putc(8'h30 + {4'd0, se_d1});
+                            putc(8'h2E); putc(8'h30 + {4'd0, se_d0});
                             putc(8'h20); putc(8'h44); putc(8'h3D);
                             putc(8'h30 + {4'd0, du_d3}); putc(8'h30 + {4'd0, du_d2});
                             putc(8'h30 + {4'd0, du_d1}); putc(8'h30 + {4'd0, du_d0});
+                            putc(8'h20); putc(8'h48); putc(8'h3D);
+                            putc(8'h30 + {4'd0, ht_d3}); putc(8'h30 + {4'd0, ht_d2});
+                            putc(8'h30 + {4'd0, ht_d1}); putc(8'h30 + {4'd0, ht_d0});
                             putc(8'h20); putc(8'h47); putc(8'h3D); putc(8'h30 + {5'd0, gear});
                             putc(8'h20); putc(8'h53); putc(8'h54); putc(8'h3D);
                             putc(8'h30 + {6'd0, state});
@@ -335,6 +381,10 @@ module cmd_proc (
                             putc(8'h41); putc(8'h3D); put_hex4(cal_a);
                             putc(8'h20); putc(8'h42); putc(8'h3D); put_hex4(cal_b);
                             putc(8'h20); putc(8'h52); putc(8'h3D); put_hex4(tj_raw);
+                            // AM2302 诊断：E=总错误数，C=校验错数（C 增长说明传感器应答了但位解码错）
+                            putc(8'h20); putc(8'h45); putc(8'h3D); put_hex4(ext_err_cnt);
+                            putc(8'h20); putc(8'h43); putc(8'h3D); put_hex4(ext_crc_cnt);
+                            // 风扇诊断：N=实测转速(hex, rpm)，F=堵转累计次数
                             putc(8'h0D); putc(8'h0A);
                         end
                         C_R: begin
@@ -346,6 +396,12 @@ module cmd_proc (
                         C_S: begin
                             wr_en   <= 1'b1;
                             wr_addr <= 6'h04;
+                            wr_data <= {16'd0, to_q88(v_int, v_frac)};
+                            put_ok;
+                        end
+                        C_SE: begin
+                            wr_en   <= 1'b1;
+                            wr_addr <= 6'h0E;                     // 环境温度闭环目标值
                             wr_data <= {16'd0, to_q88(v_int, v_frac)};
                             put_ok;
                         end

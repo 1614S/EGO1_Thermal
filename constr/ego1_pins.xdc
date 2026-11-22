@@ -84,11 +84,24 @@ set_property -dict {PACKAGE_PIN N5 IOSTANDARD LVCMOS33} [get_ports uart_rx]
 set_property -dict {PACKAGE_PIN T4 IOSTANDARD LVCMOS33} [get_ports uart_tx]
 
 #-----------------------------------------------------------------------
-# Pmod：exp_io0/1/2 = B16 A15 A13
+# Pmod：exp_io0/1/2/3 = B16 A15 A13 B18
 #   exp_io0 -> fan_pwm（4 线风扇 PWM 输入）
 #   exp_io1 -> fan_tach（风扇转速反馈，外部上拉）
 #   exp_io2 -> dht_dq（AM2302 单总线，外部 4.7k 上拉到 3.3V）
+#   exp_io3 -> heat_pwm（环境加热电阻 PWM，低边 N-MOS 栅极，需 100R 串阻 + 10k 下拉）
 #-----------------------------------------------------------------------
 set_property -dict {PACKAGE_PIN B16 IOSTANDARD LVCMOS33} [get_ports fan_pwm]
-set_property -dict {PACKAGE_PIN A15 IOSTANDARD LVCMOS33} [get_ports fan_tach]
 set_property -dict {PACKAGE_PIN A13 IOSTANDARD LVCMOS33 PULLTYPE PULLUP} [get_ports dht_dq]
+set_property -dict {PACKAGE_PIN B18 IOSTANDARD LVCMOS33} [get_ports heat_pwm]
+
+#-----------------------------------------------------------------------
+# 数码管第 1 组（右 4 位）段选：D4 E3 D3 F4 F3 E2 D2 H2
+#-----------------------------------------------------------------------
+set_property -dict {PACKAGE_PIN D4 IOSTANDARD LVCMOS33} [get_ports {seg2[0]}]
+set_property -dict {PACKAGE_PIN E3 IOSTANDARD LVCMOS33} [get_ports {seg2[1]}]
+set_property -dict {PACKAGE_PIN D3 IOSTANDARD LVCMOS33} [get_ports {seg2[2]}]
+set_property -dict {PACKAGE_PIN F4 IOSTANDARD LVCMOS33} [get_ports {seg2[3]}]
+set_property -dict {PACKAGE_PIN F3 IOSTANDARD LVCMOS33} [get_ports {seg2[4]}]
+set_property -dict {PACKAGE_PIN E2 IOSTANDARD LVCMOS33} [get_ports {seg2[5]}]
+set_property -dict {PACKAGE_PIN D2 IOSTANDARD LVCMOS33} [get_ports {seg2[6]}]
+set_property -dict {PACKAGE_PIN H2 IOSTANDARD LVCMOS33} [get_ports {seg2[7]}]

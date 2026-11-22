@@ -23,7 +23,7 @@ host_logger.py —— 串口采集 32 B 遥测帧 → CSV（分析脚本能直�
     22-23 F_MEAS (0.1 MHz)
     24-25 P_EST (mW)
     26    AGE(100ms)    27 FLAGS
-    28-29 保留 0
+    28-29 TSET_EXT (Q8.8)；另 b20[7:3]+b21[7:2] = DUTY_HEAT (11 bit)
     30-31 CRC16/CCITT-FALSE，覆盖字节 2–29
 
 用法：
@@ -85,12 +85,14 @@ def decode_frame(b):
         "rh_pct":  (b[14] | (b[15] << 8)) / 10.0,
         "tset_c":  q8_8(b[16], b[17]),
         "duty":    duty,
-        "gear":    b[20],
-        "state":   b[21],
+        "gear":    b[20] & 0x07,
+        "state":   b[21] & 0x03,
         "f_mhz":   (b[22] | (b[23] << 8)) / 10.0,
         "p_mw":    b[24] | (b[25] << 8),
         "age":     b[26],
         "flags":   b[27],
+        "duty_heat":  ((b[20] >> 3) | ((b[21] >> 2) << 5)),
+        "tset_ext_c": q8_8(b[28], b[29]),
     }
 
 
@@ -115,7 +117,7 @@ def frames_from_stream(data):
 # ---------------------------------------------------------------------------
 
 CSV_COLS = ["t_s", "tj_c", "text_c", "rh_pct", "tset_c", "duty", "gear",
-            "state", "f_mhz", "p_mw", "age", "flags", "seq", "ts_ms"]
+            "state", "f_mhz", "p_mw", "age", "flags", "seq", "ts_ms", "tset_ext_c", "duty_heat"]
 
 
 def row_of(f, t0_ms):
@@ -146,7 +148,8 @@ def write_meta(csv_path, meta):
 # 自检：造帧 → 解码 → 往返
 # ---------------------------------------------------------------------------
 
-def make_frame(seq, ts_ms, tj_q8, text_q8, rh_x10, tset_q8, duty, gear, state, f_x10, p_mw, age, flags):
+def make_frame(seq, ts_ms, tj_q8, text_q8, rh_x10, tset_q8, duty, gear, state, f_x10, p_mw, age, flags,
+               duty_heat=0, tset_ext_q8=0):
     b = bytearray(FRAME_LEN)
     b[0], b[1] = 0xA5, 0x5A
     b[2], b[3] = 0x01, 0x01
@@ -158,7 +161,9 @@ def make_frame(seq, ts_ms, tj_q8, text_q8, rh_x10, tset_q8, duty, gear, state, f
     b[16], b[17] = tset_q8 & 0xFF, (tset_q8 >> 8) & 0xFF
     b[18] = duty & 0x07
     b[19] = (duty >> 3) & 0xFF
-    b[20], b[21] = gear, state
+    b[20] = (gear & 0x07) | ((duty_heat & 0x1F) << 3)
+    b[21] = (state & 0x03) | (((duty_heat >> 5) & 0x3F) << 2)
+    b[28], b[29] = tset_ext_q8 & 0xFF, (tset_ext_q8 >> 8) & 0xFF
     b[22], b[23] = f_x10 & 0xFF, (f_x10 >> 8) & 0xFF
     b[24], b[25] = p_mw & 0xFF, (p_mw >> 8) & 0xFF
     b[26], b[27] = age, flags

@@ -74,7 +74,7 @@ module tb_frame;
         .clk(clk), .rst_n(rst_n), .send(send),
         .seq_in(16'h1234), .ts_in(32'h0001_0203),
         .tj_in(16'sd12800), .text_in(16'sd6400), .rh_in(16'd14080),
-        .tset_in(16'sd12800), .duty_in(11'd500), .gear_in(3'd3),
+        .tset_in(16'sd12800), .tset_ext_in(16'sd10240), .duty_in(11'd500), .duty_heat_in(11'd100), .gear_in(3'd3),
         .state_in(2'd0), .f_in(16'd1000), .p_in(16'd1200),
         .age_in(8'd0), .flags_in(8'd0),
         .tx_start(tx_start), .tx_data(tx_data), .tx_busy(1'b0), .busy(busy)

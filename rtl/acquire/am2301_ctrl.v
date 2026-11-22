@@ -25,14 +25,15 @@ module am2301_ctrl #(
     output reg         [15:0] rh_q8_8,
     output reg                valid,        // 单拍
     output reg                err,          // 单拍
-    output reg         [15:0] err_cnt
+    output reg         [15:0] err_cnt,      // 总错误数（超时 + 校验）
+    output reg         [15:0] crc_err_cnt   // 仅校验错（说明传感器应答了但位解码错）
 );
 
     //------------------------------------------------------------------
     // 时间常数（单位：clk 周期）
     //------------------------------------------------------------------
-    localparam integer C_START_LOW = CLK_HZ / 1000 * 12 / 10;   // 1.2 ms
-    localparam integer C_TIMEOUT   = CLK_HZ / 1000 * 3 / 10;    // 300 us
+    localparam integer C_START_LOW = CLK_HZ / 1000 * 5;          // 5 ms（器件允许 1~20 ms，低压下留余量）
+    localparam integer C_TIMEOUT   = CLK_HZ / 1000 * 1;          // 1 ms（原来 300 us，3.7 V 下响应偏慢会误判超时）
     localparam integer C_BIT_TH    = CLK_HZ / 1000000 * 48;     // 48 us
     localparam integer C_TOTAL_MAX = CLK_HZ / 1000 * 20;        // 20 ms
 
@@ -130,6 +131,7 @@ module am2301_ctrl #(
             valid     <= 1'b0;
             err       <= 1'b0;
             err_cnt   <= 16'd0;
+            crc_err_cnt <= 16'd0;
         end else begin
             valid <= 1'b0;
             err   <= 1'b0;
@@ -226,6 +228,7 @@ module am2301_ctrl #(
                     end else begin
                         err     <= 1'b1;
                         err_cnt <= err_cnt + 16'd1;
+                        crc_err_cnt <= crc_err_cnt + 16'd1;
                     end
                     st <= S_IDLE;
                 end

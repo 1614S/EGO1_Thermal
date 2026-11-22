@@ -50,11 +50,11 @@ call :run tb_gear         "%ROOT%\sim\tb\tb_units_ctrl.sv"
 call :run tb_acq          "%ROOT%\sim\tb\tb_units_io.sv"
 call :run tb_frame        "%ROOT%\sim\tb\tb_units_io.sv"
 call :run tb_cmd          "%ROOT%\sim\tb\tb_cmd.sv"
-call :run tb_fan          "%ROOT%\sim\tb\tb_units_fan.sv"
 call :run tb_uart115      "%ROOT%\sim\tb\tb_units_io.sv"
 call :run tb_vplant_open  "%ROOT%\sim\tb\tb_vplant_open.sv"
 call :run tb_vplant_if    "%ROOT%\sim\tb\tb_vplant_if.sv"
 call :run tb_top_smoke    "%ROOT%\sim\tb\tb_top_smoke.sv"
+call :run tb_ext_loop     "%ROOT%\sim\tb\tb_ext_loop.sv"
 call :run tb_vplant_sys   "%ROOT%\sim\tb\tb_vplant_sys.sv" 10000
 
 if /i "%~1"=="full" call :closed

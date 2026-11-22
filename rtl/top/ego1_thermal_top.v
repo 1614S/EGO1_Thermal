@@ -15,12 +15,13 @@ module ego1_thermal_top (
     input  wire [4:0]  btn,
     input  wire [7:0]  sw,
     output wire [15:0] led,
-    output wire [7:0]  seg,
+    output wire [7:0]  seg,          // 左 4 位（第 0 组）段选
+    output wire [7:0]  seg2,         // 右 4 位（第 1 组）段选
     output wire [7:0]  an,           // 低 4 位扫描，高 4 位恒灭
     output wire        uart_tx,
     input  wire        uart_rx,
     output wire        fan_pwm,
-    input  wire        fan_tach,
+    output wire        heat_pwm,       // 环境加热电阻 PWM（B18 / J5-7）
     inout  wire        dht_dq
 );
 
@@ -98,12 +99,12 @@ module ego1_thermal_top (
     wire signed [15:0] t_ext;
     wire [15:0]        rh_ext;
     wire               ext_val, ext_err;
-    wire [15:0]        ext_err_cnt;
+    wire [15:0]        ext_err_cnt, ext_crc_cnt;
 
 `ifdef SIM_MODEL
     localparam integer EXT_PERIOD_US = 1000;       // 仿真 1 ms（事务本身 5.5 ms，忙时自动跳过）
 `else
-    localparam integer EXT_PERIOD_US = 2_500_000;  // 硬件 2.5 s（器件要求 ≥2 s，留 25% 余量）
+    localparam integer EXT_PERIOD_US = 3_000_000;  // 硬件 3 s（器件 ≥2 s；实测 2.5 s 仍会锁死总线，再放宽）
 `endif
 
     am2301_ctrl #(
@@ -118,7 +119,8 @@ module ego1_thermal_top (
         .rh_q8_8  (rh_ext),
         .valid    (ext_val),
         .err      (ext_err),
-        .err_cnt  (ext_err_cnt)
+        .err_cnt  (ext_err_cnt),
+        .crc_err_cnt (ext_crc_cnt)
     );
 
     //------------------------------------------------------------------
@@ -233,7 +235,7 @@ module ego1_thermal_top (
 
     reg  [1:0]  sp_idx;
     reg  [3:0]  btn_d;
-    wire [3:0]  btn_pressed = ~btn[3:0];          // EGO1 按键按下为低
+    wire [3:0]  btn_pressed = ~btn[3:0];          // EGO1 按键按下为低（S0~S3）
     wire [3:0]  btn_pulse   = btn_pressed & ~btn_d;
 
     always @(posedge clk_sys or negedge rst_sys_n) begin
@@ -443,7 +445,7 @@ module ego1_thermal_top (
         .th_warn_q8_8(th_warn),
         .th_hot_q8_8 (th_hot),
         .th_crit_q8_8(th_crit),
-        .clr_alarm   (btn[4]),
+        .clr_alarm   (1'b0),             // 清报警移到串口 R 命令；S4 改为切环境温度设定值
         .state       (state),
         .fan_max     (fan_max),
         .gear_low    (gear_low),
@@ -498,6 +500,68 @@ module ego1_thermal_top (
     );
 
     //------------------------------------------------------------------
+    // 环境温度闭环（AM2302 → 加热电阻 PWM，B18/J5-7）
+    //   设定值：命令 SE=xx.x 写入寄存器 0x0E（Q8.8），默认 40.0 ℃
+    //   增益：先给一组保守常数（环境对象比结温慢、增益小），需要时再改成命令可调
+    //   安全：告警/超温/外部数据失效/时钟未锁定时强制 0，避免"故障反而猛加热"
+    //------------------------------------------------------------------
+    reg signed [15:0] setpoint_ext;
+    reg        [1:0]  se_idx;
+
+    // S4（btn[4]）独立边沿检测：原有 btn_pressed/btn_pulse 只有 4 位（S0~S3），
+    // 直接引用 btn_pulse[4] 是越界的（上板表现：按 S4 没反应）。
+    reg s4_d, s4_armed;
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n) begin
+            s4_d     <= 1'b1;                    // 按键低有效，空闲为高
+            s4_armed <= 1'b0;
+        end else begin
+            s4_d <= btn[4];
+            if (btn[4]) s4_armed <= 1'b1;        // 上电保护：先看到松开，才允许计数
+        end
+    end
+    wire s4_press = s4_armed & s4_d & ~btn[4];   // 高→低 = 按下
+
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n) begin
+            setpoint_ext <= 16'sd10240;                          // 40.0 ℃
+            se_idx       <= 2'd0;
+        end else if (s4_press) begin                             // S4：40 → 50 → 60 → 40
+            se_idx       <= (se_idx == 2'd2) ? 2'd0 : se_idx + 2'd1;
+            setpoint_ext <= (se_idx == 2'd0) ? `T_50_Q8_8 :
+                            (se_idx == 2'd1) ? `T_60_Q8_8 : `T_40_Q8_8;
+        end else if (cmd_wr_en && cmd_wr_addr == 6'h0E) begin
+            setpoint_ext <= cmd_wr_data[15:0];                   // SE= 命令优先
+        end
+    end
+
+    wire        heater_en = locked && (state != 2'd3) && (ext_age < 16'd100)
+                            && (text_filt < 16'sd19200);       // < 75 ℃ 才允许加热
+    wire [10:0] duty_ext;
+    wire        ext_sat;
+
+    ext_loop u_ext (
+        .clk      (clk_sys),
+        .rst_n    (rst_sys_n),
+        .update   (sample_valid),
+        .t_ext    (text_filt),
+        .t_room   (16'sd6400),       // 室温参考 25.0 ℃（前馈基准；未单独测室温时的保守假设）
+        .sp_ext   (setpoint_ext),
+        .kp_q8_8  (16'd512),         // Kp = 2.0 duty/℃（对象增益仅 0.25 K/duty，不能大）
+        .ki_q8_8  (16'd5),           // Ki = 0.02 duty/(℃·样本)；配合积分分离(2 K)防超调
+        .heater_en(heater_en),
+        .duty     (duty_ext),
+        .saturated(ext_sat)
+    );
+
+    pwm_gen u_pwm_heat (
+        .clk   (clk_sys),
+        .rst_n (rst_sys_n),
+        .duty  (duty_ext),
+        .pwm   (heat_pwm)
+    );
+
+    //------------------------------------------------------------------
     // 执行：自热负载（core 域）+ 测频
     //------------------------------------------------------------------
     wire [15:0] act_cnt;
@@ -528,10 +592,6 @@ module ego1_thermal_top (
     //   联调时哪一段出问题一望即知。
     //------------------------------------------------------------------
     wire [15:0] vp_rpm;
-    wire        fan_fail;
-    wire [15:0] fan_rpm, fan_fail_cnt;
-    // 虚拟热台模式下用虚拟风扇的 tach，真实模式下用板上 tach（assign 放后面，声明顺序）
-    wire        fan_tach_eff;
     wire        vp_tach, vp_stalled;
     wire [15:0] vp_inv_r2;
     wire [7:0]  vp_flow;
@@ -555,19 +615,6 @@ module ego1_thermal_top (
         .inv_r2_q12   (vp_inv_r2),
         .flow_q8      (vp_flow),
         .stalled      (vp_stalled)
-    );
-
-    assign fan_tach_eff = sw[6] ? vp_tach : fan_tach;
-
-    fan_tach u_ftach (
-        .clk      (clk_sys),
-        .rst_n    (rst_sys_n),
-        .tick_ms  (tick_ms),
-        .tach     (fan_tach_eff),
-        .duty     (duty_fan),
-        .rpm      (fan_rpm),
-        .fan_fail (fan_fail),
-        .fail_cnt (fan_fail_cnt)
     );
 
     power_model u_vpwr (
@@ -671,12 +718,17 @@ module ego1_thermal_top (
         .wr_data  (cmd_wr_data),
         .tj_f     (tj_filt),
         .setpoint (setpoint),
+        .tset_ext (setpoint_ext),
         .duty     (duty),
+        .duty_heat(duty_ext),
         .gear     (gear),
         .state    (state),
         .tj_raw   (tj_s),
+        .text_f   (text_filt),
         .cal_a    (cal_a),
         .cal_b    (cal_b),
+        .ext_err_cnt (ext_err_cnt),
+        .ext_crc_cnt (ext_crc_cnt),
         .n_cmd    (cmd_n_cmd),
         .n_err    (cmd_n_err),
         .n_cal    (cmd_n_cal)
@@ -703,13 +755,15 @@ module ego1_thermal_top (
         .text_in  (text_filt),
         .rh_in    (rh_s),
         .tset_in  (setpoint),
+        .tset_ext_in (setpoint_ext),            // 环境温度设定值（byte28-29）
         .duty_in  (duty),
+        .duty_heat_in(duty_ext),                // 加热占空比（byte20/21 高位）
         .gear_in  (gear),
         .state_in (state),
         .f_in     (f_meas),
         .p_in     (p_est),
         .age_in   (ext_age[7:0]),
-        .flags_in ({5'd0, fan_fail, drp_err, alarm}),
+        .flags_in ({6'd0, drp_err, alarm}),          // bit2(堵转) 已随 TACH 删除，恒 0
         .tx_start (fb_tx_start),
         .tx_data  (fb_tx_data),
         .tx_busy  (tx_busy | cmd_busy),
@@ -762,69 +816,86 @@ module ego1_thermal_top (
 
     reg [1:0] disp_page;
     always @(posedge clk_sys or negedge rst_sys_n) begin
-        if (!rst_sys_n)                 disp_page <= 2'd0;   // 默认 = 结温页
-        else if (pg_press)              disp_page <= disp_page + 2'd1;
+        if (!rst_sys_n)                 disp_page <= 2'd0;   // 默认第 1 页
+        else if (pg_press)              disp_page <= (disp_page == 2'd2) ? 2'd0 : disp_page + 2'd1;
     end
 
-    // 显示必须用"标定后的原始值"而不是重滤波值：MA8 的窗口是 8×100 ms = 800 ms，
-    // 用 tj_filt 显示会把"端到端延迟 ≤200 ms"直接击穿（docs/01 §2.4 本来也是这么定的）
-    wire signed [15:0] disp_val = (disp_page == 2'd1) ? $signed({1'b0, setpoint}) :
-                                  (disp_page == 2'd3) ? text_cal :
-                                  (disp_page == 2'd0) ? tj_cal   : 16'sd0;
-    wire [15:0] disp_abs = disp_val[15] ? (~disp_val + 16'd1) : disp_val;
-    // 注意位宽：disp_abs 是 Q8.8，×5 后 51.2 ℃(13107) 就会超过 16 位，
-    // 原来写成 16 位上下文会直接溢出归零（上板实测 >51 ℃ 显示翻回 00.0）。
-    wire [20:0] t01_w = disp_abs * 21'd5;            // 中间量扩到 21 位
-    wire [15:0] t01   = t01_w[19:7];                 // /128 → 0.1 ℃ 单位
-
-    // 十进制拆分：/10 ≈ ×205 >> 11，/100 ≈ ×2622 >> 18（避免常数除数位链）
-    //   2622/2^18 = 0.0100021（略大于 0.01），向下取整才对；
-    //   原来用 2621（0.0099988，略小），遇到整百（t01=500 → 4.999）会算成 4，
-    //   50.0 ℃ 就显示成 "4A.0"（上板实测）。
-    wire [27:0] d_mul10  = t01 * 11'd205;
-    wire [15:0] t_div10  = d_mul10[26:11];               // t01/10
-    wire [33:0] d_mul100 = t01 * 18'd2622;
-    wire [15:0] t_div100 = d_mul100[33:18];              // t01/100
-    wire [3:0]  d0 = (t01 - t_div10 * 16'd10);           // 个位（0.1 ℃）
-    wire [3:0]  d1 = (t_div10 - t_div100 * 16'd10);      // 十位（℃ 个位）
-    wire [3:0]  d2_raw = t_div100[3:0];
-    wire [3:0]  d2 = (d2_raw > 4'd9) ? (d2_raw - 4'd10) : d2_raw;
-
     //------------------------------------------------------------------
-    // 占空比页：duty 0…1000 直接显示 4 位十进制（不带小数点）
+    // 8 位数码管：左 4 位 = 结温/设定值/风扇占空比，右 4 位 = 传感器温度/设定值/加热占空比
+    //   第 1 页：实测结温 | 实测环境温度
+    //   第 2 页：结温设定值 | 环境温度设定值
+    //   第 3 页：风扇 PWM 占空比 | 加热 PWM 占空比
+    //
+    // 拆位全部用扩位中间量（踩过的坑：16 位上下文截断 → 51.2 ℃ 归零 / 占空比 A~F）
     //------------------------------------------------------------------
-    wire [15:0] du     = {5'd0, duty};
-    wire [3:0]  du_k   = (du >= 16'd1000) ? 4'd1 : 4'd0;          // 千位
-    wire [15:0] du_r   = du - (du_k ? 16'd1000 : 16'd0);
-    // 乘积必须先落到 22 位中间量：du_r ≤ 999，999×2622 = 2.6 M 需要 22 位，
-    // 直接写 `(du_r * 18'd2622) >> 18` 会被赋值的 16 位上下文截断，
-    // 拆位出现 10~15（数码管显示 A~F）——上板实测过。
-    wire [21:0] du_m100 = du_r * 18'd2622;
-    wire [21:0] du_m10  = du_r * 11'd205;
-    wire [15:0] du_100 = du_m100[21:18];                          // 百位
-    wire [15:0] du_10  = du_m10[21:11];                           // 十位
-    wire [15:0] du_t10 = du_10  - du_100 * 16'd10;
-    wire [15:0] du_o10 = du_r   - du_10  * 16'd10;
+    // 温度 Q8.8 → 4 位 BCD（左1 空白、左2 十位、左3 个位、左4 小数），小数点放位 2
+    function [15:0] to_tdisp(input signed [15:0] q);
+        reg [15:0] a, t10, d10, t100, e0, e1;
+        reg [33:0] m;
+        begin
+            a   = q[15] ? (~q + 16'd1) : q;
+            m   = a * 21'd5;            // 21 位中间量
+            t10 = m[19:7];              // 0.1 ℃
+            m   = t10 * 11'd205;  d10  = m[26:11];
+            m   = t10 * 18'd2622; t100 = m[33:18];
+            e0  = t10 - d10  * 16'd10;
+            e1  = d10 - t100 * 16'd10;
+            to_tdisp = { e0[3:0], e1[3:0], t100[3:0], 4'hF };
+        end
+    endfunction
 
-    // 实测确认：an[0] 在最左；小数点画在所选数字右侧
-    //   左1=digits[3:0]，左2=[7:4]，左3=[11:8]，左4=[15:12]
-    wire [3:0]  p_a = (disp_page == 2'd2) ? du_k       : 4'hF;
-    wire [3:0]  p_b = (disp_page == 2'd2) ? du_100[3:0] : d2;
-    wire [3:0]  p_c = (disp_page == 2'd2) ? du_t10[3:0] : d1;
-    wire [3:0]  p_d = (disp_page == 2'd2) ? du_o10[3:0] : d0;
+    // 占空比 0…1000 → 4 位 BCD（左1 千位、左2 百位、左3 十位、左4 个位），无小数点
+    function [15:0] to_ddisp(input [10:0] d);
+        reg [15:0] r, h, t, t10, o10;
+        reg [3:0]  k;
+        reg [21:0] m;
+        begin
+            k  = (d >= 11'd1000) ? 4'd1 : 4'd0;
+            r  = {5'd0, d} - (k ? 16'd1000 : 16'd0);
+            m  = r * 18'd2622; h   = m[21:18];
+            m  = r * 11'd205;  t   = m[21:11];
+            t10 = t - h * 16'd10;
+            o10 = r - t * 16'd10;
+            to_ddisp = { o10[3:0], t10[3:0], h[3:0], k };
+        end
+    endfunction
 
-    wire [15:0] seg_digits = sw[4] ? 16'h4321 : {p_d, p_c, p_b, p_a};
-    wire [3:0]  seg_dp     = sw[4] ? 4'b0001 :
-                             ((disp_page == 2'd2) ? 4'b0000 : 4'b0100);
+    wire [15:0] dig_l, dig_r;       // 左/右 4 位的 BCD
+    wire [3:0]  dp_l, dp_r;
 
-    seg7_scan #(.DIV(100000)) u_seg (
+    assign dig_l = sw[4] ? 16'h4321 :
+                   (disp_page == 2'd0) ? to_tdisp(tj_cal)      :
+                   (disp_page == 2'd1) ? to_tdisp(setpoint)    :
+                                         to_ddisp(duty);
+    assign dig_r = sw[4] ? 16'h4321 :
+                   (disp_page == 2'd0) ? to_tdisp(text_cal)    :
+                   (disp_page == 2'd1) ? to_tdisp(setpoint_ext):
+                                         to_ddisp(duty_ext);
+    assign dp_l  = sw[4] ? 4'b0001 : ((disp_page == 2'd2) ? 4'b0000 : 4'b0100);
+    assign dp_r  = sw[4] ? 4'b0001 : ((disp_page == 2'd2) ? 4'b0000 : 4'b0100);
+
+    wire [3:0] an_lo, an_hi;
+
+    seg7_scan #(.DIV(100000)) u_seg_lo (
         .clk   (clk_sys),
         .rst_n (rst_sys_n),
-        .digits(seg_digits),
-        .dp    (seg_dp),
+        .digits(dig_l),
+        .dp    (dp_l),
         .seg   (seg),
-        .an    (an)
+        .an4   (an_lo)
     );
+
+    seg7_scan #(.DIV(100000)) u_seg_hi (
+        .clk   (clk_sys),
+        .rst_n (rst_sys_n),
+        .digits(dig_r),
+        .dp    (dp_r),
+        .seg   (seg2),
+        .an4   (an_hi)
+    );
+
+    // an[3:0] = 第 0 组（左 4 位），an[7:4] = 第 1 组（右 4 位）
+    assign an = {an_hi, an_lo};
 
     reg [23:0] heart;
     always @(posedge clk_sys or negedge rst_sys_n) begin
@@ -849,7 +920,7 @@ module ego1_thermal_top (
     assign led[2]    = (state == 2'd3);
     assign led[3]    = ~locked;
     assign led[6:4]  = gear;              // 档位（3 bit）；led[7] 单独给风扇故障
-    assign led[7]    = fan_fail;          // 风扇堵转/断线指示
+    assign led[7]    = ext_sat;           // 加热输出饱和指示（原 TACH 堵转灯已删）
     assign led[15:8] = heart[23:16];
 
 endmodule
