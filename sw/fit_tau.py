@@ -298,6 +298,42 @@ def plot_curve(path, t_all, y_all, t_fit, y_fit, fit, meta, tau_ci=None):
 
 
 # ---------------------------------------------------------------------------
+# 仅绘图模式（--plot-only）：不判型、不算 τ/θ、不出报告
+# ---------------------------------------------------------------------------
+def plot_only_figure(path, t, y, channel, channel_col, csv_name, setpoint=None,
+                     sp_label="setpoint"):
+    """画温度-时间曲线（可选叠加设定值台阶），不做任何拟合。"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(9.6, 5.2), dpi=130)
+    ax.plot(t, y, lw=1.0, color="#1f4e79", label=f"measured ({channel_col})")
+    if setpoint is not None:
+        ax.step(t, setpoint, where="post", lw=1.2, color="#c00000",
+                label=sp_label)
+
+    # 设定值发生变化的时刻（用于快速确认阶跃点）
+    if setpoint is not None and len(setpoint) > 1:
+        d = np.abs(np.diff(setpoint))
+        for i in np.where(d > 1e-6)[0][:8]:
+            ax.axvline(t[i + 1], ls=":", lw=0.9, color="#888888")
+
+    ax.set_xlabel("time t (s)")
+    ax.set_ylabel("temperature ($^\\circ$C)")
+    ax.set_title(f"Measured temperature  |  {csv_name}  |  channel = {channel}",
+                 fontsize=11)
+    ax.grid(alpha=0.25)
+    ax.set_xlim(t[0] - 2, t[-1] + 2)
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    h, l = ax.get_legend_handles_labels()
+    fig.legend(h, l, loc="lower center", ncol=2, fontsize=8, frameon=False,
+               bbox_to_anchor=(0.5, 0.005))
+    fig.savefig(path)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # 报告
 # ---------------------------------------------------------------------------
 def write_report(path, meta, theta, u_rel, u_terms, tau_ci, fit, t63):
@@ -487,7 +523,7 @@ def run_selftest():
 
 def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
              u_p=0.25, u_temp=0.5, t0_win=10.0, n_boot=400, out_dir=None,
-             quiet=False):
+             quiet=False, plot_only=False):
     """跑完整流程：读数据 → 校验 → 拟合 → 不确定度 → 报告/曲线/JSON。
 
     返回结果 dict（同时把 report.md / curve.png / fit.json / 原 CSV 写到 out_dir）。
@@ -499,6 +535,40 @@ def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
 
     channel_col, y_all = pick_series(data, channel)
     t_all = data["t_s"]
+    # ---------------- 仅绘图模式：不判型、不算 τ/θ、不出报告 ----------------
+    if plot_only:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        od = Path(out_dir) if out_dir else (
+            csv_path.parent / f"{csv_path.stem}_{channel}_plot_{stamp}")
+        od.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(csv_path, od / csv_path.name)
+
+        sp = None
+        sp_label = "setpoint"
+        sp_col = "tset_ext_c" if channel == "text" else "tset_c"
+        if sp_col in data:
+            sp = data[sp_col]
+            sp_label = f"{sp_col}"
+        plot_only_figure(od / "curve.png", t_all, y_all, channel, channel_col,
+                         csv_path.name, sp, sp_label)
+
+        res = dict(csv=str(csv_path), channel=channel, column=channel_col,
+                   mode="plot-only", n=int(len(y_all)),
+                   duration_s=float(t_all[-1] - t_all[0]),
+                   ymin=float(np.min(y_all)), ymax=float(np.max(y_all)),
+                   out_dir=str(od),
+                   generated=datetime.now().isoformat(timespec="seconds"))
+        (od / "plot.json").write_text(
+            json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+        if not quiet:
+            print(f"数据      : {csv_path.name}  ({len(y_all)} 帧, "
+                  f"{t_all[-1] - t_all[0]:.1f} s)  通道 {channel}")
+            print(f"范围      : {res['ymin']:.2f} ~ {res['ymax']:.2f} C")
+            print("模式      : 仅绘图（不判型 / 不算 τ、θ / 不出报告）")
+            print(f"输出目录  : {od}")
+            print(f"           curve.png / plot.json / {csv_path.name}")
+        return res
+
     p_mw, p_src = series_power(data, p_mw_override)
     tamb, tamb_src = series_tamb(data, tamb_override, channel)
 
@@ -640,6 +710,8 @@ def main():
     ap = argparse.ArgumentParser(description="estimate tau/theta with report + plot")
     ap.add_argument("--csv", default=None,
                     help="遥测 CSV（capture_serial.ps1 / host_logger.py 输出）")
+    ap.add_argument("--plot-only", action="store_true",
+                    help="不判断数据形状、不算 τ/θ、不出报告，只画温度-时间曲线")
     ap.add_argument("--selftest", action="store_true",
                     help="合成已知 τ/θ 的数据自检两条通道（不需要硬件）")
     ap.add_argument("--channel", choices=["tj", "text"], default="tj",
@@ -663,7 +735,7 @@ def main():
 
     estimate(args.csv, args.channel, p_mw_override=args.p_mw, tamb_override=args.tamb,
              u_p=args.u_p, u_temp=args.u_temp, t0_win=args.t0_win,
-             n_boot=args.boot, out_dir=args.out)
+             n_boot=args.boot, out_dir=args.out, plot_only=args.plot_only)
 
 
 if __name__ == "__main__":
