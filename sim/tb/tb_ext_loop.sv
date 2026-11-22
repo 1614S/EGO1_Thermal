@@ -19,6 +19,7 @@ module tb_ext_loop;
     reg signed [15:0] sp = 16'sd10240;      // 40.0 ℃
     wire [10:0] duty;
     wire        sat;
+    wire        bang;      // 1 = 加热环处于饱和区（0/100 %）
 
     // ---------------- DUT ----------------
     reg  signed [15:0] t_amb_q;             // 环境温度（Q8.8），由被控对象给出
@@ -33,6 +34,7 @@ module tb_ext_loop;
         .ki_q8_8  (16'd3),        // Ki = 0.01 duty/(C*sample)
         .heater_en(1'b1),
         .duty     (duty),
+        .bang     (bang),
         .saturated(sat)
     );
 
@@ -64,6 +66,9 @@ module tb_ext_loop;
     // ---------------- 测试序列 ----------------
     integer i, k;
     integer fails = 0;
+    integer max_duty;
+    integer min_duty;
+    integer n_bang;
     real y0, ymax, yss, os;
     task step(input real sp_c, input integer n_upd);
         begin
@@ -71,16 +76,24 @@ module tb_ext_loop;
             // 记录起点
             y0 = t_amb;
             ymax = t_amb;
+            max_duty = 0;
+            min_duty = 1000;
+            n_bang   = 0;
             for (i = 0; i < n_upd; i = i + 1) begin
                 @(posedge clk);
                 while (update !== 1'b1) @(posedge clk);
                 if (t_amb > ymax) ymax = t_amb;
+                if (duty > max_duty) max_duty = duty;
+                if (duty < min_duty) min_duty = duty;
+                if (bang) n_bang = n_bang + 1;
             end
             yss = t_amb;
             os = (ymax - sp_c) / (sp_c - y0) * 100.0;
             if (os < 0) os = 0;
             $display("  Tset=%5.1f C  T0=%6.2f  Tmax=%6.2f  Tss=%6.2f  overshoot=%5.1f%%  err=%+5.2f C  duty=%0d",
                      sp_c, y0, ymax, yss, os, yss - sp_c, duty);
+            $display("            饱和区样本=%0d/%0d  duty 范围=%0d~%0d  (大误差应饱和到 0/1000)",
+                     n_bang, n_upd, min_duty, max_duty);
             // 判据：稳态误差 ≤±0.5 C、超调 ≤10 %
             if ((yss - sp_c) > 0.5 || (yss - sp_c) < -0.5) begin
                 fails = fails + 1;
@@ -89,6 +102,27 @@ module tb_ext_loop;
             if (os > 10.0) begin
                 fails = fails + 1;
                 $display("  [FAIL] 超调 %.1f %% 超差（要求 ≤10）", os);
+            end
+            // 阶跃幅度 >4 K 时，必须先进饱和区（0/100 %），逼近后才交给 PI
+            if ((sp_c - y0) < -4.0) begin
+                if (n_bang == 0) begin
+                    fails = fails + 1;
+                    $display("  [FAIL] 反向大误差没进饱和区（应输出 0 %% 降温）");
+                end
+                if (min_duty > 0) begin
+                    fails = fails + 1;
+                    $display("  [FAIL] 反向大误差时占空比没降到 0（最小 %0d）", min_duty);
+                end
+            end
+            if ((sp_c - y0) > 4.0) begin
+                if (n_bang == 0) begin
+                    fails = fails + 1;
+                    $display("  [FAIL] 大误差阶段没有进入饱和区（应输出 100%%）");
+                end
+                if (max_duty < 1000) begin
+                    fails = fails + 1;
+                    $display("  [FAIL] 大误差阶段占空比没到 1000（实测 %0d）", max_duty);
+                end
             end
         end
     endtask
@@ -102,6 +136,7 @@ module tb_ext_loop;
         step(40.0, 6000);
         step(50.0, 6000);
         step(60.0, 6000);
+        step(42.0, 6000);      // 反向大阶跃：应进饱和区输出 0 %，降温后再交给 PI
         if (fails == 0) $display("==== tb_ext_loop : PASS (fails=0) ====");
         else            $display("==== tb_ext_loop : FAIL (fails=%0d) ====", fails);
         $display("=== 完成 ===");

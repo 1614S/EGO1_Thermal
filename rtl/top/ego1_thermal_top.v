@@ -538,6 +538,7 @@ module ego1_thermal_top (
     wire        heater_en = locked && (state != 2'd3) && (ext_age < 16'd100)
                             && (text_filt < 16'sd19200);       // < 75 ℃ 才允许加热
     wire [10:0] duty_ext;
+    wire        ext_bang;        // 1 = 加热环处于饱和区（输出 0/100 %）
     wire        ext_sat;
 
     ext_loop u_ext (
@@ -551,6 +552,7 @@ module ego1_thermal_top (
         .ki_q8_8  (16'd5),           // Ki = 0.02 duty/(℃·样本)；配合积分分离(2 K)防超调
         .heater_en(heater_en),
         .duty     (duty_ext),
+        .bang     (ext_bang),
         .saturated(ext_sat)
     );
 
