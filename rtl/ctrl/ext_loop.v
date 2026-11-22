@@ -84,8 +84,12 @@ module ext_loop #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)      bang <= 1'b1;                 // 上电先饱和逼近
         else if (update) begin
-            if (bang) bang <= (aerr > HYST_Q88);       // 饱和区：误差掉到 4 K 以内才切 PI
-            else      bang <= (aerr > BAND_Q88);       // PI 区：误差超过 3 K 就回饱和
+            // 迟滞的正确方向：误差**缩小**到 BAND(3 K) 才退出饱和；
+            // 误差**涨过** HYST(4 K) 才回到饱和。两者都在 [3,4] 之间时保持原模式。
+            //   （旧代码把两个阈值写反了：退出阈值 4 K > 回退阈值 3 K，
+            //     误差停在 4 K 附近就会 饱和↔PI 反复抖动，上板实测 H 在 960↔1000 跳）
+            if (bang) bang <= (aerr > BAND_Q88);       // 饱和区：误差进入 3 K 以内 → 交给 PI
+            else      bang <= (aerr > HYST_Q88);       // PI 区：误差涨过 4 K → 回饱和
         end
     end
 

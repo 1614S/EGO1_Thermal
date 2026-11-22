@@ -50,6 +50,7 @@ module tb_ext_loop;
     real cth     = 4.0;                     // J/K → τ = 107 s
     real dt      = 0.1;                     // 每个 update 推进 0.1 s
 
+    reg seen_band = 1'b0;
     integer cycle = 0;
     always @(posedge clk) begin
         cycle <= cycle + 1;
@@ -69,9 +70,11 @@ module tb_ext_loop;
     integer max_duty;
     integer min_duty;
     integer n_bang;
+    integer n_relapse;      // 进入 PI 区后又掉回饱和区的次数（应为 0）
     real y0, ymax, yss, os;
     task step(input real sp_c, input integer n_upd);
         begin
+            seen_band = 1'b0;
             sp = $rtoi(sp_c * 256.0);
             // 记录起点
             y0 = t_amb;
@@ -79,6 +82,7 @@ module tb_ext_loop;
             max_duty = 0;
             min_duty = 1000;
             n_bang   = 0;
+            n_relapse = 0;
             for (i = 0; i < n_upd; i = i + 1) begin
                 @(posedge clk);
                 while (update !== 1'b1) @(posedge clk);
@@ -86,14 +90,22 @@ module tb_ext_loop;
                 if (duty > max_duty) max_duty = duty;
                 if (duty < min_duty) min_duty = duty;
                 if (bang) n_bang = n_bang + 1;
+                // 误差首次进入 ±3 K 之后，若又回到饱和区 → 迟滞失效（真正要防的现象）
+                if (!seen_band && (sp_c - t_amb) <= 3.0 && (t_amb - sp_c) <= 3.0)
+                    seen_band = 1'b1;
+                if (seen_band && bang) n_relapse = n_relapse + 1;
             end
             yss = t_amb;
             os = (ymax - sp_c) / (sp_c - y0) * 100.0;
             if (os < 0) os = 0;
             $display("  Tset=%5.1f C  T0=%6.2f  Tmax=%6.2f  Tss=%6.2f  overshoot=%5.1f%%  err=%+5.2f C  duty=%0d",
                      sp_c, y0, ymax, yss, os, yss - sp_c, duty);
-            $display("            饱和区样本=%0d/%0d  duty 范围=%0d~%0d  (大误差应饱和到 0/1000)",
-                     n_bang, n_upd, min_duty, max_duty);
+            $display("            饱和区样本=%0d/%0d  duty 范围=%0d~%0d  回饱和次数=%0d",
+                     n_bang, n_upd, min_duty, max_duty, n_relapse);
+            if (n_relapse > 5) begin
+                fails = fails + 1;
+                $display("  [FAIL] 进入 PI 区后又反复回到饱和区 %0d 次（迟滞阈值写反？）", n_relapse);
+            end
             // 判据：稳态误差 ≤±0.5 C、超调 ≤10 %
             if ((yss - sp_c) > 0.5 || (yss - sp_c) < -0.5) begin
                 fails = fails + 1;
