@@ -42,3 +42,5 @@ __pycache__/
 *.tmp
 *.swp
 
+# 提交打包产物（pack_submission.ps1 生成）
+out/
