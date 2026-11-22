@@ -48,6 +48,7 @@ module cmd_proc (
     input  wire signed [15:0] text_f,           // AM2302 环境温度（Q8.8），用于 ? 状态行的 A= 字段
     input  wire        [15:0] cal_a,
     input  wire signed [15:0] cal_b,
+    input  wire        [15:0] switch_max,       // 切档最大耗时（0.1 µs 单位），供 Z 回读
     input  wire        [15:0] ext_err_cnt,      // AM2302 总错误数
     input  wire        [15:0] ext_crc_cnt,      // AM2302 校验错数
     output reg         [15:0] n_cmd,
@@ -269,12 +270,17 @@ module cmd_proc (
                 // 逐字符解析：8 拍，一个时钟处理一个字符
                 S_NUM: begin
                     if (nk < 5'd8) begin
-                        ch = (nstart + nk < 5'd24) ? lbuf[nstart + nk] : 8'h00;
+                        // 只看**实际收到的字符**：lbuf 里可能残留上一条命令的字符，
+                        // 若不按 blen 截断，"CB=0.5" 会吃到残留的 '0' 变成 ".50"，
+                        // 而 to_q88 按"一位小数"换算 → 0.5 被算成 5.0（实测 1280 而应为 128）
+                        ch = ((nstart + nk) < blen && (nstart + nk) < 5'd24)
+                             ? lbuf[nstart + nk] : 8'h00;
                         if (nact) begin
                             if (ch >= 8'h30 && ch <= 8'h39) begin
                                 if (!v_dot)
                                     v_int  <= v_int * 16'd10 + {12'd0, (ch - 8'h30)};
-                                else if (v_frac < 16'd100)
+                                else if (v_frac < 16'd10)
+                                    // 只保留一位小数：接口分辨率就是 0.1（to_q88 也按十分位算）
                                     v_frac <= v_frac * 16'd10 + {12'd0, (ch - 8'h30)};
                                 v_any <= 1'b1;
                             end else if (ch == 8'h2E) begin
@@ -384,6 +390,8 @@ module cmd_proc (
                             // AM2302 诊断：E=总错误数，C=校验错数（C 增长说明传感器应答了但位解码错）
                             putc(8'h20); putc(8'h45); putc(8'h3D); put_hex4(ext_err_cnt);
                             putc(8'h20); putc(8'h43); putc(8'h3D); put_hex4(ext_crc_cnt);
+                            // U = 切档最大耗时（0.1 µs 单位），用于替代逻辑分析仪
+                            putc(8'h20); putc(8'h55); putc(8'h3D); put_hex4(switch_max);
                             // 风扇诊断：N=实测转速(hex, rpm)，F=堵转累计次数
                             putc(8'h0D); putc(8'h0A);
                         end

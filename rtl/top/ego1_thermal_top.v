@@ -774,6 +774,7 @@ module ego1_thermal_top (
         .text_f   (text_filt),
         .cal_a    (cal_a),
         .cal_b    (cal_b),
+        .switch_max  (switch_max_us),
         .ext_err_cnt (ext_err_cnt),
         .ext_crc_cnt (ext_crc_cnt),
         .n_cmd    (cmd_n_cmd),
