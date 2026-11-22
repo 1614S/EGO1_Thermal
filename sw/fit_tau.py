@@ -325,6 +325,11 @@ def plot_only_figure(path, t, y, channel, channel_col, csv_name, setpoint=None,
                  fontsize=11)
     ax.grid(alpha=0.25)
     ax.set_xlim(t[0] - 2, t[-1] + 2)
+    # 纵轴按**实测曲线**定范围：设定值在开机瞬间可能有未初始化的值（如 10），
+    # 让它把纵轴拉到 10 会把曲线压扁，所以只按 y 定界，超出的设定值自然被裁掉
+    _lo, _hi = float(np.min(y)), float(np.max(y))
+    _pad = max((_hi - _lo) * 0.12, 0.5)
+    ax.set_ylim(_lo - _pad, _hi + _pad)
     fig.tight_layout(rect=(0, 0.08, 1, 1))
     h, l = ax.get_legend_handles_labels()
     fig.legend(h, l, loc="lower center", ncol=2, fontsize=8, frameon=False,
@@ -541,7 +546,10 @@ def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
         od = Path(out_dir) if out_dir else (
             csv_path.parent / f"{csv_path.stem}_{channel}_plot_{stamp}")
         od.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(csv_path, od / csv_path.name)
+        # 若输出目录就是 CSV 所在目录，跳过复制（否则 Windows 会报"文件被占用"）
+        _dst = od / csv_path.name
+        if _dst.resolve() != csv_path.resolve():
+            shutil.copy2(csv_path, _dst)
 
         sp = None
         sp_label = "setpoint"
@@ -649,7 +657,9 @@ def estimate(csv_path, channel, p_mw_override=None, tamb_override=None,
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     od = Path(out_dir) if out_dir else (csv_path.parent / f"{csv_path.stem}_{channel}_{stamp}")
     od.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(csv_path, od / csv_path.name)
+    _dst = od / csv_path.name
+    if _dst.resolve() != csv_path.resolve():
+        shutil.copy2(csv_path, _dst)
 
     meta_png = dict(channel=channel, channel_col=channel_col, tamb=tamb,
                     A=fit["A"], ip=ip, t_peak=float(t_all[ip]), csv_name=csv_path.name,

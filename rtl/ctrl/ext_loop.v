@@ -132,8 +132,16 @@ module ext_loop #(
                                                     duty_pi;
 
     // 目标占空比：饱和区 = 0/1000；PI 区 = 过温回调后的 PI 输出
-    wire [10:0] target = (!heater_en) ? 11'd0 :
-                         bang ? (err[16] ? 11'd0 : 11'd1000) : pi_adj;
+    // 打一拍再进斜率限制：text_filt → 减法 → 选择 → 斜率比较 → duty_r 这条链
+    // 在 100 MHz 下差 0.02 ns 不收敛（2026-11-22 实测 WNS −0.020，3 个违例）；
+    // PI 环 100 ms 才更新一次，多一拍没有影响。
+    wire [10:0] target_c = (!heater_en) ? 11'd0 :
+                           bang ? (err[16] ? 11'd0 : 11'd1000) : pi_adj;
+    reg  [10:0] target;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) target <= 11'd0;
+        else        target <= target_c;
+    end
 
     //------------------------------------------------------------------
     // 斜率限制：保证饱和区↔PI 区切换时没有阶跃（无扰切换）
