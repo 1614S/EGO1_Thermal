@@ -72,15 +72,20 @@ function Pump([int]$ms) {
                 text= Q8 $f[12] $f[13]
                 rh  = (([int]$f[14] -bor ([int]$f[15] -shl 8))) / 10.0
                 duty= [int]$f[18] -bor ([int]$f[19] -shl 3)
-                gear= [int]$f[20]
-                st  = [int]$f[21]
+                # 新版遥测帧：b20 高 5 位是加热占空比低 5 位，b21 高 6 位是高 6 位
+                # 所以 gear/state 必须掩码，否则会读到 234 这种值（旧解析器的 bug）
+                gear= ([int]$f[20]) -band 0x07
+                st  = ([int]$f[21]) -band 0x03
+                hd  = (([int]$f[20] -shr 3) -bor (([int]$f[21] -shr 2) -shl 5))
+                tse = Q8 $f[28] $f[29]
                 f   = (([int]$f[22] -bor ([int]$f[23] -shl 8))) / 10.0
                 p   = [int]$f[24] -bor ([int]$f[25] -shl 8)
                 seq = [int]$f[4] -bor ([int]$f[5] -shl 8)
             }
             $global:frames += $rec
-            $rows.Add(("{0:F2},{1:F2},{2:F2},{3:F1},{4:F2},{5},{6},{7},{8:F1},{9},{10}" -f `
-                $rec.T, $rec.tj, $rec.text, $rec.rh, $rec.tset, $rec.duty, $rec.gear, $rec.st, $rec.f, $rec.p, $rec.seq))
+            $rows.Add(("{0:F2},{1:F2},{2:F2},{3:F1},{4:F2},{5},{6},{7},{8:F1},{9},{10},{11:F2},{12}" -f `
+                $rec.T, $rec.tj, $rec.text, $rec.rh, $rec.tset, $rec.duty, $rec.gear, $rec.st,
+                $rec.f, $rec.p, $rec.seq, $rec.tse, $rec.hd))
         }
     }
 }
@@ -96,7 +101,7 @@ $sp.Close()
 
 $dir = Split-Path -Parent $Csv
 if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-"t_s,tj_c,text_c,rh_pct,tset_c,duty,gear,state,f_mhz,p_mw,seq" | Set-Content $Csv -Encoding utf8
+"t_s,tj_c,text_c,rh_pct,tset_c,duty,gear,state,f_mhz,p_mw,seq,tset_ext_c,duty_heat" | Set-Content $Csv -Encoding utf8
 $rows | Add-Content $Csv -Encoding utf8
 
 # ---- 指标 ----
@@ -123,4 +128,7 @@ Write-Host ("末段稳态    : {0:F2} ℃   稳态误差 {1:F2} ℃" -f $tend, (
 if ($null -ne $settle) { Write-Host ("调节时间    : {0:F1} s（±{1} ℃ 带内）" -f $settle, $band) }
 else { Write-Host "调节时间    : 未在采集窗口内进入误差带" }
 Write-Host ("帧数        : {0}   本次发送命令后 {1} 秒" -f $frames.Count, $PostSeconds)
+Write-Host ("档位范围   : {0} ~ {1}（应为 0~4；若出现 234 说明解帧未掩码）" -f `
+    ($frames | Measure-Object -Property gear -Minimum).Minimum, `
+    ($frames | Measure-Object -Property gear -Maximum).Maximum)
 Write-Host "CSV -> $Csv"
